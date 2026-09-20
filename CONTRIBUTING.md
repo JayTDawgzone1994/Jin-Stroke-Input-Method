@@ -2,6 +2,14 @@
 
 歡迎以繁體中文或英文提交 Issue / Pull Request。
 
+## 分支流程
+
+- `develop`：日常開發分支，新功能與修正先在此整合；一般 PR 請以此為目標。
+- `main`：保留發布版本。準備發布時，將驗證完成的 `develop` 合併至 `main`，再建立版本標籤與 GitHub Release。
+- 個別功能分支從 `develop` 建立，完成後合併回 `develop`。
+
+## 開發規範
+
 1. 先依 README 建置並執行測試。
 2. 一個 PR 專注一個問題，說明使用情境、修改後行為及驗證結果。
 3. 核心維持 C++20；平台相依程式放在 Windows 層。遵循 `.clang-format` 與 `.editorconfig`。
