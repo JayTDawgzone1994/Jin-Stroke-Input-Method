@@ -27,32 +27,15 @@
         <StackPanel Spacing="16">
           <TextBlock Text="按鍵配置" Style="{ThemeResource SubtitleTextBlockStyle}"/>
           <ComboBox x:Name="Mode" HorizontalAlignment="Stretch" AutomationProperties.Name="輸入配置">
-            <ComboBoxItem Content="標準配置　上排點、折、＊"/>
-            <ComboBoxItem Content="傳統配置　上排橫、豎、撇"/>
-            <ComboBoxItem Content="自訂配置"/>
+            <ComboBoxItem Content="標準"/>
+            <ComboBoxItem Content="傳統"/>
+            <ComboBoxItem Content="自訂"/>
           </ComboBox>
-          <Grid ColumnSpacing="24">
-            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-            <StackPanel Spacing="10">
-              <TextBlock Text="左手" FontWeight="SemiBold" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-              <Grid x:Name="LeftKeys" ColumnSpacing="8" RowSpacing="8">
-                <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
-                <Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
-              </Grid>
-            </StackPanel>
-            <StackPanel Grid.Column="1" Spacing="10">
-              <TextBlock Text="右手" FontWeight="SemiBold" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-              <Grid x:Name="RightKeys" ColumnSpacing="8" RowSpacing="8">
-                <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
-                <Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
-              </Grid>
-            </StackPanel>
-          </Grid>
-          <TextBlock x:Name="KeyHint" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-          <StackPanel Orientation="Horizontal" Spacing="8">
-            <Button x:Name="CopyStandard" Content="從標準配置自訂"/>
-            <Button x:Name="CopyTraditional" Content="從傳統配置自訂"/>
-          </StackPanel>
+          <Viewbox Stretch="Uniform" HorizontalAlignment="Stretch">
+            <StackPanel x:Name="Keyboard" Width="840" Spacing="6"/>
+          </Viewbox>
+          <TextBlock Text="點選字母鍵設定筆畫；其餘按鍵保留原本功能。" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+
         </StackPanel>
       </Border>
       <Border Style="{StaticResource Card}">

@@ -4,20 +4,23 @@
 #include "learning_store.hpp"
 #include <dwmapi.h>
 #include <fstream>
+#include <limits>
 #include <microsoft.ui.xaml.window.h>
-#include <optional>
 #include <shellapi.h>
+#include <vector>
 #include <winrt/Microsoft.UI.Dispatching.h>
 #include <winrt/Microsoft.UI.Windowing.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
 #include <winrt/Microsoft.UI.Xaml.Markup.h>
+#include <winrt/Microsoft.UI.Xaml.Media.Imaging.h>
 #include <winrt/Microsoft.UI.Xaml.Media.h>
 #include <winrt/Microsoft.UI.Xaml.XamlTypeInfo.h>
 #include <winrt/Microsoft.UI.Xaml.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Storage.Streams.h>
 #include <winrt/Windows.UI.Xaml.Interop.h>
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
@@ -46,16 +49,13 @@ struct SettingsApp : ApplicationT<SettingsApp, Markup::IXamlMetadataProvider> {
     FrameworkElement root{nullptr};
     stroke::win::Layout draft, saved;
     bool learning{true}, saved_learning{true}, available{}, updating{}, dialog_open{},
-        allow_close{}, preview_active{}, custom_top_horizontal{};
+        allow_close{}, preview_active{};
     HWND hwnd{};
     HHOOK hook{};
     std::filesystem::path layout_file, learning_file;
-    std::optional<size_t> capture;
     std::string preview;
-    std::array<Button, 12> buttons{nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
-                                   nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
-    std::array<TextBlock, 12> key_labels{nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
-                                         nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
+    std::vector<Button> buttons;
+    std::vector<TextBlock> key_labels;
     template <class T> T control(const wchar_t* name) { return root.FindName(name).as<T>(); }
     void status(const wchar_t* text, InfoBarSeverity severity = InfoBarSeverity::Informational) {
         auto bar = control<InfoBar>(L"Status");
@@ -88,53 +88,150 @@ struct SettingsApp : ApplicationT<SettingsApp, Markup::IXamlMetadataProvider> {
         control<TextBlock>(L"PreviewText").Text(text.empty() ? L"點此開始試打" : text);
     }
     void update_keys() {
-        auto keys = layout_keys(draft);
-        for (size_t i = 0; i < 12; ++i) {
-            std::wstring key(1, keys[i] ? static_cast<wchar_t>(keys[i] - 'a' + 'A') : L'—');
-            key_labels[i].Text(capture == i ? L"…" : key);
-            Automation::AutomationProperties::SetName(buttons[i],
-                                                      std::wstring(i % 2 ? L"右手 " : L"左手 ") +
-                                                          labels[i / 2] + L"，按鍵 " + key);
+        const auto keys = layout_keys(draft);
+        for (size_t i = 0; i < 26; ++i) {
+            key_labels[i].Text(keys[i] ? std::wstring(1, L"一丨丿丶フ＊"[keys[i] - 1]) : L" ");
+            Automation::AutomationProperties::SetName(
+                buttons[i], std::wstring(1, static_cast<wchar_t>(L'A' + i)) + L"，" +
+                                (keys[i] ? labels[keys[i] - 1] : L"未綁定"));
         }
         control<Button>(L"Apply").IsEnabled(valid_layout(draft));
     }
     void render() {
         updating = true;
-        capture.reset();
         preview_active = false;
         control<ComboBox>(L"Mode").SelectedIndex(static_cast<int>(draft.mode));
         control<ToggleSwitch>(L"Reverse").IsOn(draft.reverse_selection);
         control<ToggleSwitch>(L"Learning").IsOn(learning);
         control<ToggleSwitch>(L"Learning").IsEnabled(available);
-        auto left = control<Grid>(L"LeftKeys"), right = control<Grid>(L"RightKeys");
-        left.Children().Clear();
-        right.Children().Clear();
-        for (int pos = 0; pos < 6; ++pos)
-            for (int hand = 0; hand < 2; ++hand) {
-                const bool horizontal_top =
-                    draft.mode == LayoutMode::traditional ||
-                    (draft.mode == LayoutMode::custom && custom_top_horizontal);
-                const int stroke = horizontal_top ? pos : (pos + 3) % 6;
-                auto button = buttons[static_cast<size_t>(stroke * 2 + hand)];
-                Grid::SetRow(button, pos / 3);
-                Grid::SetColumn(button, pos % 3);
-                (hand ? right : left).Children().Append(button);
-            }
-        control<TextBlock>(L"KeyHint")
-            .Text(draft.mode == LayoutMode::custom
-                      ? L"點選按鍵方塊，再按 A–Z 指定；Delete 清除，Esc 取消。"
-                      : L"左手 QWE／ASD，右手 UIO／JKL。可複製成自訂配置再調整。");
         update_keys();
         update_preview();
         updating = false;
     }
-    void copy(LayoutMode mode) {
-        stroke::win::Layout preset;
-        preset.mode = mode;
-        draft.custom = layout_keys(preset);
-        draft.mode = LayoutMode::custom;
-        custom_top_horizontal = mode == LayoutMode::traditional;
-        render();
+    void assign(char key, unsigned char stroke) {
+        if (bind_key(draft, key, stroke)) {
+            render();
+            status(L"按鍵草稿已更新，按「套用變更」儲存。");
+        }
+    }
+    void make_keyboard() {
+        buttons.resize(26, nullptr);
+        key_labels.resize(26, nullptr);
+        // ANSI typing block, each row spans 15 key units. Reserved keys are inert.
+        struct Key {
+            const wchar_t* text;
+            double width;
+            char letter{};
+        };
+        const std::vector<std::vector<Key>> rows{{{L"`", 1},
+                                                  {L"1", 1},
+                                                  {L"2", 1},
+                                                  {L"3", 1},
+                                                  {L"4", 1},
+                                                  {L"5", 1},
+                                                  {L"6", 1},
+                                                  {L"7", 1},
+                                                  {L"8", 1},
+                                                  {L"9", 1},
+                                                  {L"0", 1},
+                                                  {L"-", 1},
+                                                  {L"=", 1},
+                                                  {L"Backspace", 2}},
+                                                 {{L"Tab", 1.5},
+                                                  {L"Q", 1, 'q'},
+                                                  {L"W", 1, 'w'},
+                                                  {L"E", 1, 'e'},
+                                                  {L"R", 1, 'r'},
+                                                  {L"T", 1, 't'},
+                                                  {L"Y", 1, 'y'},
+                                                  {L"U", 1, 'u'},
+                                                  {L"I", 1, 'i'},
+                                                  {L"O", 1, 'o'},
+                                                  {L"P", 1, 'p'},
+                                                  {L"[", 1},
+                                                  {L"]", 1},
+                                                  {L"\\", 1.5}},
+                                                 {{L"Caps", 1.75},
+                                                  {L"A", 1, 'a'},
+                                                  {L"S", 1, 's'},
+                                                  {L"D", 1, 'd'},
+                                                  {L"F", 1, 'f'},
+                                                  {L"G", 1, 'g'},
+                                                  {L"H", 1, 'h'},
+                                                  {L"J", 1, 'j'},
+                                                  {L"K", 1, 'k'},
+                                                  {L"L", 1, 'l'},
+                                                  {L";", 1},
+                                                  {L"'", 1},
+                                                  {L"Enter", 2.25}},
+                                                 {{L"Shift", 2.25},
+                                                  {L"Z", 1, 'z'},
+                                                  {L"X", 1, 'x'},
+                                                  {L"C", 1, 'c'},
+                                                  {L"V", 1, 'v'},
+                                                  {L"B", 1, 'b'},
+                                                  {L"N", 1, 'n'},
+                                                  {L"M", 1, 'm'},
+                                                  {L",", 1},
+                                                  {L".", 1},
+                                                  {L"/", 1},
+                                                  {L"Shift", 2.75}},
+                                                 {{L"Ctrl", 1.25},
+                                                  {L"Win", 1.25},
+                                                  {L"Alt", 1.25},
+                                                  {L"Space", 6.25},
+                                                  {L"Alt", 1.25},
+                                                  {L"Win", 1.25},
+                                                  {L"Menu", 1.25},
+                                                  {L"Ctrl", 1.25}}};
+        for (const auto& keys : rows) {
+            Grid row;
+            int column = 0;
+            for (const auto& key : keys) {
+                ColumnDefinition definition;
+                definition.Width(GridLength{key.width, GridUnitType::Star});
+                row.ColumnDefinitions().Append(definition);
+                Button button;
+                button.HorizontalAlignment(HorizontalAlignment::Stretch);
+                button.Margin(Thickness{3, 0, 3, 0});
+                button.Padding(Thickness{2, 4, 2, 4});
+                button.MinWidth(0);
+                button.Height(62);
+                StackPanel panel;
+                panel.Spacing(2);
+                TextBlock title;
+                title.Text(key.text);
+                title.FontSize(key.letter ? 17 : 12);
+                title.HorizontalAlignment(HorizontalAlignment::Center);
+                panel.Children().Append(title);
+                if (key.letter) {
+                    const auto index = static_cast<size_t>(key.letter - 'a');
+                    buttons[index] = button;
+                    TextBlock stroke;
+                    stroke.FontSize(17);
+                    stroke.HorizontalAlignment(HorizontalAlignment::Center);
+                    key_labels[index] = stroke;
+                    panel.Children().Append(stroke);
+                    MenuFlyout menu;
+                    for (unsigned char value = 0; value <= 6; ++value) {
+                        MenuFlyoutItem item;
+                        item.Text(value ? labels[value - 1] : L"取消綁定");
+                        item.Click([this, letter = key.letter, value](auto&&, auto&&) {
+                            assign(letter, value);
+                        });
+                        menu.Items().Append(item);
+                    }
+                    button.Flyout(menu);
+                } else {
+                    button.IsEnabled(false);
+                    button.IsTabStop(false);
+                }
+                button.Content(panel);
+                Grid::SetColumn(button, column++);
+                row.Children().Append(button);
+            }
+            control<StackPanel>(L"Keyboard").Children().Append(row);
+        }
     }
     bool apply() {
         if (!valid_layout(draft))
@@ -216,24 +313,6 @@ struct SettingsApp : ApplicationT<SettingsApp, Markup::IXamlMetadataProvider> {
     bool key(UINT key) {
         if (dialog_open || key == VK_TAB || key == VK_SHIFT)
             return false;
-        if (capture) {
-            if (key == VK_ESCAPE)
-                capture.reset();
-            else if (key >= 'A' && key <= 'Z') {
-                draft.custom[*capture] = static_cast<char>(key - 'A' + 'a');
-                capture.reset();
-            } else if (key == VK_DELETE || key == VK_BACK) {
-                draft.custom[*capture] = 0;
-                capture.reset();
-            }
-            update_keys();
-            update_preview();
-            if (!valid_layout(draft))
-                status(L"同一按鍵不能代表不同筆劃，請調整重複的按鍵。", InfoBarSeverity::Warning);
-            else if (!capture)
-                status(L"按鍵草稿已更新，按「套用變更」儲存。");
-            return true;
-        }
         if (preview_active) {
             if (key == VK_ESCAPE)
                 preview.clear();
@@ -264,20 +343,70 @@ struct SettingsApp : ApplicationT<SettingsApp, Markup::IXamlMetadataProvider> {
         }
         return CallNextHookEx(nullptr, code, wp, lp);
     }
-    void smoke() {
+    Windows::Foundation::IAsyncAction snapshot(const wchar_t* name) {
+        Media::Imaging::RenderTargetBitmap bitmap;
+        co_await bitmap.RenderAsync(root);
+        auto buffer = co_await bitmap.GetPixelsAsync();
+        std::vector<uint8_t> pixels(buffer.Length());
+        Windows::Storage::Streams::DataReader::FromBuffer(buffer).ReadBytes(pixels);
+        BITMAPFILEHEADER file{};
+        BITMAPINFOHEADER info{};
+        file.bfType = 0x4D42;
+        file.bfOffBits = sizeof(file) + sizeof(info);
+        file.bfSize = file.bfOffBits + static_cast<DWORD>(pixels.size());
+        info.biSize = sizeof(info);
+        info.biWidth = bitmap.PixelWidth();
+        info.biHeight = -bitmap.PixelHeight();
+        info.biPlanes = 1;
+        info.biBitCount = 32;
+        std::ofstream out(test_root / name, std::ios::binary);
+        out.write(reinterpret_cast<const char*>(&file), sizeof(file));
+        out.write(reinterpret_cast<const char*>(&info), sizeof(info));
+        out.write(reinterpret_cast<const char*>(pixels.data()),
+                  static_cast<std::streamsize>(pixels.size()));
+        if (!out)
+            throw std::runtime_error("snapshot write failed");
+    }
+    fire_and_forget smoke() {
+        auto lifetime = get_strong();
         try {
-            copy(LayoutMode::traditional);
-            if (draft.custom[0] != 'q')
-                throw std::runtime_error("traditional");
-            copy(LayoutMode::standard);
-            capture = 0;
-            key('Q');
-            if (valid_layout(draft))
-                throw std::runtime_error("duplicates");
-            capture = 0;
-            key('Z');
-            if (!valid_layout(draft))
-                throw std::runtime_error("custom");
+            unsigned editable{}, reserved{};
+            for (const auto& element : control<StackPanel>(L"Keyboard").Children()) {
+                for (const auto& child : element.as<Grid>().Children()) {
+                    const auto button = child.as<Button>();
+                    if (button.IsEnabled()) {
+                        ++editable;
+                        if (button.Flyout().as<MenuFlyout>().Items().Size() != 7)
+                            throw std::runtime_error("stroke menu");
+                    } else {
+                        ++reserved;
+                        if (button.Flyout() || button.IsTabStop())
+                            throw std::runtime_error("reserved key");
+                    }
+                }
+            }
+            if (editable != 26 || reserved != 35)
+                throw std::runtime_error("typing block");
+            draft.mode = LayoutMode::traditional;
+            render();
+            assign('z', 1);
+            if (draft.mode != LayoutMode::custom || draft.custom['q' - 'a'] != 1)
+                throw std::runtime_error("traditional edit");
+            draft = stroke::win::Layout{};
+            render();
+            assign('z', 1);
+            assign('x', 1);
+            if (draft.mode != LayoutMode::custom || draft.custom['a' - 'a'] != 1 ||
+                draft.custom['j' - 'a'] != 1)
+                throw std::runtime_error("unlimited aliases");
+            const auto custom = draft.custom;
+            control<ComboBox>(L"Mode").SelectedIndex(1);
+            control<ComboBox>(L"Mode").SelectedIndex(2);
+            if (draft.custom != custom)
+                throw std::runtime_error("custom preservation");
+            assign('x', 0);
+            if (draft.custom['x' - 'a'])
+                throw std::runtime_error("unbind");
             preview_active = true;
             for (char c : std::string("ZSDQWE"))
                 key(c);
@@ -297,13 +426,22 @@ struct SettingsApp : ApplicationT<SettingsApp, Markup::IXamlMetadataProvider> {
             root.RequestedTheme(ElementTheme::Dark);
             if (root.ActualTheme() != ElementTheme::Dark)
                 throw std::runtime_error("dark theme");
+            co_await snapshot(L"keyboard-dark.bmp");
             root.RequestedTheme(ElementTheme::Light);
             if (root.ActualTheme() != ElementTheme::Light)
                 throw std::runtime_error("light theme");
+            co_await snapshot(L"keyboard-light.bmp");
+            root.Width(600);
+            co_await snapshot(L"keyboard-narrow.bmp");
+            root.Width(std::numeric_limits<double>::quiet_NaN());
             root.RequestedTheme(ElementTheme::Default);
             std::ofstream(test_root / L"result.txt")
-                << "PASS: presets, custom conflicts, raw keys, stroke preview, reverse order, "
+                << "PASS: keyboard presets, aliases, unbind, custom preservation, stroke preview, "
+                   "reverse order, "
                    "persistence, learning, theme switching\n";
+        } catch (hresult_error const& e) {
+            result_code = 1;
+            std::ofstream(test_root / L"result.txt") << "FAIL: " << to_string(e.message());
         } catch (std::exception const& e) {
             result_code = 1;
             std::ofstream(test_root / L"result.txt") << "FAIL: " << e.what();
@@ -337,41 +475,12 @@ struct SettingsApp : ApplicationT<SettingsApp, Markup::IXamlMetadataProvider> {
             if (auto value = std::get_if<stroke::win::Layout>(&loaded))
                 draft = *value;
             saved = draft;
-            custom_top_horizontal =
-                draft.custom[0] == 'q' && draft.custom[2] == 'w' && draft.custom[4] == 'e';
             auto state = sync_learning(learning_file);
             if (auto value = std::get_if<LearningState>(&state)) {
                 learning = saved_learning = value->enabled;
                 available = true;
             }
-            for (size_t i = 0; i < 12; ++i) {
-                buttons[i] = Button();
-                buttons[i].HorizontalAlignment(HorizontalAlignment::Stretch);
-                buttons[i].MinHeight(74);
-                StackPanel panel;
-                panel.Spacing(4);
-                key_labels[i] = TextBlock();
-                key_labels[i].FontSize(23);
-                panel.Children().Append(key_labels[i]);
-                TextBlock label;
-                label.Text(labels[i / 2]);
-                label.FontSize(12);
-                panel.Children().Append(label);
-                buttons[i].Content(panel);
-                buttons[i].Click([this, i](auto&&, auto&&) {
-                    if (draft.mode == LayoutMode::custom) {
-                        capture = i;
-                        preview_active = false;
-                        update_keys();
-                    }
-                });
-                buttons[i].LostFocus([this, i](auto&&, auto&&) {
-                    if (capture == i) {
-                        capture.reset();
-                        update_keys();
-                    }
-                });
-            }
+            make_keyboard();
             control<ComboBox>(L"Mode").SelectionChanged([this](auto&&, auto&&) {
                 if (!updating) {
                     auto index = control<ComboBox>(L"Mode").SelectedIndex();
@@ -383,15 +492,8 @@ struct SettingsApp : ApplicationT<SettingsApp, Markup::IXamlMetadataProvider> {
                     }
                 }
             });
-            control<Button>(L"CopyStandard").Click([this](auto&&, auto&&) {
-                copy(LayoutMode::standard);
-            });
-            control<Button>(L"CopyTraditional").Click([this](auto&&, auto&&) {
-                copy(LayoutMode::traditional);
-            });
             control<Button>(L"Preview").Click([this](auto&&, auto&&) {
                 preview_active = true;
-                capture.reset();
                 update_keys();
             });
             control<Button>(L"Preview").LostFocus([this](auto&&, auto&&) {
