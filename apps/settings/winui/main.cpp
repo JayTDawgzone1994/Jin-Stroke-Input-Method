@@ -21,6 +21,7 @@
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Storage.Streams.h>
+#include <winrt/Windows.UI.ViewManagement.h>
 #include <winrt/Windows.UI.Xaml.Interop.h>
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
@@ -50,6 +51,9 @@ struct SettingsApp : ApplicationT<SettingsApp, Markup::IXamlMetadataProvider> {
     stroke::win::Layout draft, saved;
     bool learning{true}, saved_learning{true}, available{}, updating{}, dialog_open{},
         allow_close{}, preview_active{};
+    Windows::UI::ViewManagement::UISettings system_colors;
+    Media::SolidColorBrush stroke_brush;
+    event_token colors_changed{};
     HWND hwnd{};
     HHOOK hook{};
     std::filesystem::path layout_file, learning_file;
@@ -69,6 +73,22 @@ struct SettingsApp : ApplicationT<SettingsApp, Markup::IXamlMetadataProvider> {
         DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
         HIGHCONTRASTW contrast{sizeof(contrast)};
         SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(contrast), &contrast, 0);
+        using Windows::UI::ViewManagement::UIColorType;
+        if (contrast.dwFlags & HCF_HIGHCONTRASTON) {
+            const auto color = GetSysColor(COLOR_WINDOWTEXT);
+            stroke_brush.Color({255, GetRValue(color), GetGValue(color), GetBValue(color)});
+        } else {
+            auto color = system_colors.GetColorValue(dark ? UIColorType::AccentLight2
+                                                          : UIColorType::AccentDark1);
+            // A custom Windows accent palette may contain very dark gray shades.
+            // Keep its hue while making the small glyph legible on dark keycaps.
+            if (dark) {
+                color.R = static_cast<uint8_t>((static_cast<unsigned>(color.R) + 255) / 2);
+                color.G = static_cast<uint8_t>((static_cast<unsigned>(color.G) + 255) / 2);
+                color.B = static_cast<uint8_t>((static_cast<unsigned>(color.B) + 255) / 2);
+            }
+            stroke_brush.Color(color);
+        }
         const COLORREF background = (contrast.dwFlags & HCF_HIGHCONTRASTON)
                                         ? DWMWA_COLOR_DEFAULT
                                         : (dark ? RGB(32, 32, 32) : RGB(243, 243, 243));
@@ -201,14 +221,14 @@ struct SettingsApp : ApplicationT<SettingsApp, Markup::IXamlMetadataProvider> {
                 panel.Spacing(2);
                 TextBlock title;
                 title.Text(key.text);
-                title.FontSize(key.letter ? 17 : 12);
+                title.FontSize(12);
                 title.HorizontalAlignment(HorizontalAlignment::Center);
                 panel.Children().Append(title);
                 if (key.letter) {
                     const auto index = static_cast<size_t>(key.letter - 'a');
                     buttons[index] = button;
                     TextBlock stroke;
-                    stroke.FontSize(17);
+                    stroke.Style(root.Resources().Lookup(box_value(L"KeyboardStroke")).as<Style>());
                     stroke.HorizontalAlignment(HorizontalAlignment::Center);
                     key_labels[index] = stroke;
                     panel.Children().Append(stroke);
@@ -454,6 +474,7 @@ struct SettingsApp : ApplicationT<SettingsApp, Markup::IXamlMetadataProvider> {
             Resources().Insert(box_value(L"ContentControlThemeFontFamily"),
                                Media::FontFamily(L"Microsoft JhengHei UI"));
             Resources().MergedDictionaries().Append(XamlControlsResources{});
+            Resources().Insert(box_value(L"KeyboardStrokeBrush"), stroke_brush);
             auto module = GetModuleHandleW(nullptr);
             auto resource = FindResourceW(module, MAKEINTRESOURCEW(201), RT_RCDATA);
             if (!resource)
@@ -525,7 +546,17 @@ struct SettingsApp : ApplicationT<SettingsApp, Markup::IXamlMetadataProvider> {
                 }
             });
             root.ActualThemeChanged([this](auto&&, auto&&) { theme(); });
+            const auto dispatcher = window.DispatcherQueue();
+            colors_changed =
+                system_colors.ColorValuesChanged([weak = get_weak(), dispatcher](auto&&, auto&&) {
+                    dispatcher.TryEnqueue([weak] {
+                        if (auto self = weak.get(); self && self->hwnd)
+                            self->theme();
+                    });
+                });
             window.Closed([this](auto&&, auto&&) {
+                system_colors.ColorValuesChanged(colors_changed);
+                hwnd = nullptr;
                 if (hook)
                     UnhookWindowsHookEx(hook);
                 hook = nullptr;

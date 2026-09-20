@@ -2,6 +2,11 @@
       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
       Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
   <Grid.Resources>
+    <Style x:Key="KeyboardStroke" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{ThemeResource KeyboardStrokeBrush}"/>
+      <Setter Property="FontWeight" Value="Bold"/>
+      <Setter Property="FontSize" Value="19"/>
+    </Style>
     <Style x:Key="Card" TargetType="Border">
       <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}"/>
       <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}"/>
