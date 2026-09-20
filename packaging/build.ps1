@@ -57,11 +57,11 @@ $settingsPayload = Join-Path $projectRoot 'out/package/payload/settings'
 New-Item -ItemType Directory -Force -Path $settingsPayload | Out-Null
 Copy-Item -Path 'out/build/settings-winui/x64/Release/*' -Destination $settingsPayload -Recurse -Force
 Invoke-BuildTool $Iscc @('packaging/StrokeIME.iss')
-$installer = Join-Path $projectRoot 'out/release/StrokeIME-Setup-0.4.4-win64.exe'
+$installer = Join-Path $projectRoot 'out/release/StrokeIME-Setup-0.5.0-win64.exe'
 $hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
 Set-Content -LiteralPath "$installer.sha256" -Value "$hash  $([IO.Path]::GetFileName($installer))" -Encoding ascii
 Copy-Item -LiteralPath 'packaging/quick-start.txt' -Destination 'out/release/使用說明.txt' -Force
-Compress-Archive -LiteralPath $installer, "$installer.sha256", 'out/release/使用說明.txt' -DestinationPath 'out/release/StrokeIME-0.4.4-win64.zip' -Force
+Compress-Archive -LiteralPath $installer, "$installer.sha256", 'out/release/使用說明.txt' -DestinationPath 'out/release/StrokeIME-0.5.0-win64.zip' -Force
 Write-Output $installer
 
 
