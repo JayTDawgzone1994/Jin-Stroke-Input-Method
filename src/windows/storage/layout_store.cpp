@@ -22,7 +22,7 @@ Result<Layout> load_layout(const std::filesystem::path& path) {
         if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) return Layout{};
         return Error{ErrorCode::unavailable, "Cannot read settings"};
     }
-    char bytes[17]{}; DWORD read{};
+    char bytes[31]{}; DWORD read{};
     const BOOL success = ReadFile(file, bytes, sizeof(bytes), &read, nullptr);
     CloseHandle(file);
     if (!success) return Error{ErrorCode::unavailable, "Cannot read settings"};
