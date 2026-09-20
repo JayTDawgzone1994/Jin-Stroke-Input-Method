@@ -1,0 +1,41 @@
+{
+  "downloaded_at": "2026-09-20T20:08:46.9006450+08:00",
+  "repository": "https://github.com/chewing/libchewing-data",
+  "current_upstream": "https://codeberg.org/chewing/libchewing-data",
+  "commit": "c44e81aef24b06f1509f19e1be54c99812d0c43f",
+  "commit_date": "2026-03-22T07:01:59Z",
+  "license": "LGPL-2.1-or-later",
+  "status": "Archived GitHub snapshot; downloaded for evaluation, not integrated",
+  "files": [
+    {
+      "file": "tsi.csv",
+      "url": "https://raw.githubusercontent.com/chewing/libchewing-data/c44e81aef24b06f1509f19e1be54c99812d0c43f/dict/chewing/tsi.csv",
+      "bytes": 5244487,
+      "sha256": "c889a1ac3ae1901b3f8f62748bc41b958f010bf995f7f88dbaf9e3494f341428"
+    },
+    {
+      "file": "word.csv",
+      "url": "https://raw.githubusercontent.com/chewing/libchewing-data/c44e81aef24b06f1509f19e1be54c99812d0c43f/dict/chewing/word.csv",
+      "bytes": 399905,
+      "sha256": "da55b8e599c1389bc486453554f3410cf9c621d0ffff0ce38855698d26b3892a"
+    },
+    {
+      "file": "README.upstream.md",
+      "url": "https://raw.githubusercontent.com/chewing/libchewing-data/c44e81aef24b06f1509f19e1be54c99812d0c43f/README.md",
+      "bytes": 11431,
+      "sha256": "486e1987d107f3ebaa67143975cde59067e5567d6cb13b652ddd9fdfcae14f6b"
+    },
+    {
+      "file": "COPYING.LGPL-2.1.txt",
+      "url": "https://raw.githubusercontent.com/chewing/libchewing/3c4a93aa03d574c7f011ff84e8a2437c2f79b2cf/COPYING",
+      "bytes": 26530,
+      "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+    },
+    {
+      "file": "source.zip",
+      "url": "https://codeload.github.com/chewing/libchewing-data/zip/c44e81aef24b06f1509f19e1be54c99812d0c43f",
+      "bytes": 1645692,
+      "sha256": "8e7740ffa8ce50dda457d87b7d49faec03d75555297aa80574343434eac098f9"
+    }
+  ]
+}

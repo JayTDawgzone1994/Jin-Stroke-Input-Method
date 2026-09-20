@@ -1,0 +1,51 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base", "hidden": true,
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": { "BUILD_TESTING": "ON", "STROKE_BUILD_TOOLS": "ON" }
+    },
+    {
+      "name": "mingw-debug", "inherits": "base", "generator": "MinGW Makefiles",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "CMAKE_CXX_COMPILER": "g++.exe" }
+    },
+    {
+      "name": "mingw-release", "inherits": "base", "generator": "MinGW Makefiles",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "CMAKE_CXX_COMPILER": "g++.exe" }
+    },
+    {
+      "name": "msvc-x64", "inherits": "base",
+      "generator": "Visual Studio 18 2026", "architecture": "x64"
+    },
+    {
+      "name": "msvc-x86", "inherits": "base",
+      "generator": "Visual Studio 18 2026", "architecture": "Win32"
+    },
+    {
+      "name": "package-x64", "inherits": "msvc-x64",
+      "cacheVariables": { "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded$<$<CONFIG:Debug>:Debug>" }
+    },
+    {
+      "name": "package-x86", "inherits": "msvc-x86",
+      "cacheVariables": { "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded$<$<CONFIG:Debug>:Debug>" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "mingw-debug", "configurePreset": "mingw-debug" },
+    { "name": "mingw-release", "configurePreset": "mingw-release" },
+    { "name": "msvc-x64-debug", "configurePreset": "msvc-x64", "configuration": "Debug" },
+    { "name": "msvc-x64-release", "configurePreset": "msvc-x64", "configuration": "Release" },
+    { "name": "msvc-x86-debug", "configurePreset": "msvc-x86", "configuration": "Debug" },
+    { "name": "msvc-x86-release", "configurePreset": "msvc-x86", "configuration": "Release" }
+  ],
+  "testPresets": [
+    { "name": "mingw-debug", "configurePreset": "mingw-debug", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
+    { "name": "mingw-release", "configurePreset": "mingw-release", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
+    { "name": "msvc-x64-debug", "configurePreset": "msvc-x64", "configuration": "Debug", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
+    { "name": "msvc-x64-release", "configurePreset": "msvc-x64", "configuration": "Release", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
+    { "name": "msvc-x86-debug", "configurePreset": "msvc-x86", "configuration": "Debug", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
+    { "name": "msvc-x86-release", "configurePreset": "msvc-x86", "configuration": "Release", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } }
+  ]
+}

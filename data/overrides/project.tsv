@@ -1,0 +1,4 @@
+# action<TAB>U+codepoint<TAB>stroke-expression<TAB>class<TAB>reason/source
+# Actions: add, replace, remove. Classes: shared, traditional, simplified.
+# remove uses '-' for expression and class. One character per layer; layers apply in CLI order.
+# No unverified character corrections are enabled by default.

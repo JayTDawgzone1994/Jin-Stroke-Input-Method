@@ -1,0 +1,6 @@
+add_executable(stroke_engine_console main.cpp)
+target_link_libraries(stroke_engine_console PRIVATE stroke::engine)
+stroke_configure_target(stroke_engine_console)
+if(MINGW)
+    target_link_options(stroke_engine_console PRIVATE -municode)
+endif()

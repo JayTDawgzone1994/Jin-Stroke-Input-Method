@@ -1,0 +1,7 @@
+* text=auto eol=lf
+# Preserve pinned upstream bytes and the recorded hashes across checkouts.
+data/upstream/conway/* -text
+data/upstream/libchewing-data/* -text
+*.sidx binary
+*.zip binary
+*.ico binary

@@ -1,0 +1,27 @@
+/out/
+/build/
+/.vs/
+/CMakeUserPresets.json
+*.user
+__pycache__/
+# Research checkout remains on disk but is not vendored into this project.
+/research/stroke-input-data/
+/data/generated/
+
+# Local preferences, credentials and build/editor artifacts.
+layout.dat
+learning.dat
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+*.pem
+*.key
+*.log
+*.pdb
+*.ilk
+*.obj
+*.pyc
+.DS_Store
+Thumbs.db

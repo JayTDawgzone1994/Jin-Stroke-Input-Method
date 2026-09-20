@@ -1,0 +1,5 @@
+add_library(stroke_engine STATIC src/session.cpp)
+add_library(stroke::engine ALIAS stroke_engine)
+target_include_directories(stroke_engine PUBLIC include)
+target_link_libraries(stroke_engine PUBLIC stroke::dictionary)
+stroke_configure_target(stroke_engine)

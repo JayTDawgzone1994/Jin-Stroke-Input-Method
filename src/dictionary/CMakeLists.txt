@@ -1,0 +1,5 @@
+add_library(stroke_dictionary STATIC src/index.cpp src/text.cpp src/frequency.cpp)
+add_library(stroke::dictionary ALIAS stroke_dictionary)
+target_include_directories(stroke_dictionary PUBLIC include)
+target_link_libraries(stroke_dictionary PUBLIC stroke::domain)
+stroke_configure_target(stroke_dictionary)

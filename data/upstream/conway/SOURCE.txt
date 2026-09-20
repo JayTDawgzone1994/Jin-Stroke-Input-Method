@@ -1,0 +1,11 @@
+name=Conway Stroke Data
+url=https://github.com/stroke-input/stroke-input-data
+revision=d66ba5f5aa4cb6583883dfe8c14de553bb43616a
+upstream_version=v2.0.2
+retrieved=2026-09-16
+author=Conway (@yawnoc)
+license=CC-BY-4.0 (stroke data)
+license_url=https://creativecommons.org/licenses/by/4.0/
+codepoint-character-sequence.txt.sha256=04C51446EA91772E22260409FF8811672A3E932B4BEDA442C84B4F626EFE3522
+sequence-characters.txt.sha256=1C6F8B425E0CBBFC0E2255088CFE5DAC083EBCF0E043DE500A63E34EB1D6A20D
+note=Unmodified upstream files copied from the pinned local Git checkout. Hashes document this checkout's file bytes. The builder records current CRC32 fingerprints; it does not authenticate this manifest.

@@ -1,0 +1,13 @@
+add_library(stroke_dictionary_build STATIC src/compiler.cpp)
+add_library(stroke::dictionary_build ALIAS stroke_dictionary_build)
+target_include_directories(stroke_dictionary_build PUBLIC include)
+target_link_libraries(stroke_dictionary_build PUBLIC stroke::dictionary)
+stroke_configure_target(stroke_dictionary_build)
+
+add_executable(stroke_dict_builder main.cpp frequency_build.cpp)
+target_link_libraries(stroke_dict_builder PRIVATE stroke::dictionary_build)
+target_compile_definitions(stroke_dict_builder PRIVATE STROKE_VERSION="${PROJECT_VERSION}")
+stroke_configure_target(stroke_dict_builder)
+if(MINGW)
+    target_link_options(stroke_dict_builder PRIVATE -municode)
+endif()

@@ -1,0 +1,49 @@
+; Project-local Traditional Chinese overrides. Unlisted diagnostic messages use English.
+[LangOptions]
+LanguageName=繁體中文
+LanguageID=$0404
+LanguageCodePage=0
+
+[Messages]
+SetupAppTitle=安裝程式
+SetupWindowTitle=安裝 — %1
+UninstallAppTitle=解除安裝
+UninstallAppFullTitle=%1 解除安裝
+InformationTitle=說明
+ConfirmTitle=確認
+ErrorTitle=錯誤
+ButtonBack=< 上一步(&B)
+ButtonNext=下一步(&N) >
+ButtonInstall=安裝(&I)
+ButtonOK=確定
+ButtonCancel=取消
+ButtonYes=是(&Y)
+ButtonNo=否(&N)
+ButtonFinish=完成(&F)
+ButtonBrowse=瀏覽(&B)...
+ClickNext=按「下一步」繼續，或按「取消」離開。
+WelcomeLabel1=歡迎使用 [name] 安裝精靈
+WelcomeLabel2=即將在電腦安裝 [name/ver]。%n%n建議先儲存文件並關閉其他應用程式。
+WizardReady=準備安裝
+ReadyLabel1=安裝程式已準備好將 [name] 安裝到電腦。
+ReadyLabel2a=按「安裝」開始，或按「上一步」檢查設定。
+ReadyMemoDir=安裝位置：
+ReadyMemoGroup=開始功能表：
+WizardInstalling=正在安裝
+InstallingLabel=正在安裝 [name]，請稍候。
+StatusExtractFiles=正在複製檔案...
+StatusCreateIcons=正在建立捷徑...
+StatusCreateRegistryEntries=正在建立登錄項目...
+StatusRunProgram=正在完成安裝...
+WizardInfoAfter=使用說明
+InfoAfterLabel=請閱讀以下使用說明。
+FinishedHeadingLabel=[name] 安裝完成
+FinishedLabelNoIcons=安裝已完成。按「完成」離開。
+FinishedLabel=安裝已完成，可從 Windows 輸入法清單切換使用。%n%n已開啟的程式請先儲存再重開。按「完成」離開。
+FinishedRestartLabel=安裝完成。部分檔案需要重新啟動 Windows 才會生效。%n%n要立即重新啟動嗎？請先儲存文件。
+YesRadio=是，立即重新啟動(&Y)
+NoRadio=否，稍後再重新啟動(&N)
+UninstallStatusLabel=正在移除 %1，請稍候。
+UninstalledAll=%1 已從電腦移除。
+UninstalledMost=%1 已移除，但部分檔案仍被使用，可能需重新啟動才能清除。
+ConfirmUninstall=確定要移除 %1 及其已安裝的元件嗎？%n%n請先切換到其他輸入法並儲存文件。

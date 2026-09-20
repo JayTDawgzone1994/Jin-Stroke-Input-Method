@@ -1,0 +1,5 @@
+#include <windows.h>
+101 RCDATA
+BEGIN
+    "StrokeIME SDK toolchain probe\0"
+END

@@ -1,0 +1,4 @@
+add_executable(stroke_icon_builder main.cpp)
+target_compile_definitions(stroke_icon_builder PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(stroke_icon_builder PRIVATE user32 gdi32 gdiplus)
+stroke_configure_target(stroke_icon_builder)

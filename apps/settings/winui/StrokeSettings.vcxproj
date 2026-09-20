@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{57119E92-AAC3-4DC0-B687-F98666A26E58}</ProjectGuid>
+    <RootNamespace>StrokeSettings</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformMinVersion>10.0.17763.0</WindowsTargetPlatformMinVersion>
+    <UseWinUI>true</UseWinUI><AppxPackage>false</AppxPackage><WindowsPackageType>None</WindowsPackageType>
+    <WebView2UseWinRT>true</WebView2UseWinRT>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <WindowsAppSdkBootstrapInitialize>false</WindowsAppSdkBootstrapInitialize>
+    <WindowsAppSdkDeploymentManagerInitialize>false</WindowsAppSdkDeploymentManagerInitialize>
+    <WindowsAppSdkUndockedRegFreeWinRTInitialize>true</WindowsAppSdkUndockedRegFreeWinRTInitialize>
+    <RestoreProjectStyle>PackageReference</RestoreProjectStyle>
+    <RestorePackagesPath>$(MSBuildThisFileDirectory)..\..\..\out\dependencies\nuget</RestorePackagesPath>
+    <RestoreSources>https://api.nuget.org/v3/index.json</RestoreSources>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType><PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet><UseDebugLibraries>false</UseDebugLibraries>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <OutDir>$(MSBuildThisFileDirectory)..\..\..\out\build\settings-winui\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(MSBuildThisFileDirectory)..\..\..\out\build\settings-winui\obj\$(Platform)\$(Configuration)\</IntDir>
+    <TargetName>stroke_settings</TargetName>
+    <CppWinRTOptimized>true</CppWinRTOptimized><CppWinRTGenerateWindowsMetadata>false</CppWinRTGenerateWindowsMetadata>
+    <EnablePriGenTooling>false</EnablePriGenTooling>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <LanguageStandard>stdcpp20</LanguageStandard><WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError><ExceptionHandling>Sync</ExceptionHandling>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary><PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <AdditionalOptions>/utf-8 /permissive- %(AdditionalOptions)</AdditionalOptions>
+      <PreprocessorDefinitions>UNICODE;_UNICODE;NOMINMAX;WIN32_LEAN_AND_MEAN;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>..\..\..\src\windows\storage;..\..\..\src\domain\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link><SubSystem>Windows</SubSystem><AdditionalDependencies>windowsapp.lib;user32.lib;shell32.lib;ole32.lib;dwmapi.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <Manifest><AdditionalManifestFiles>app.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles></Manifest>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" Version="[1.8.260803003]" />
+    <PackageReference Include="Microsoft.Windows.CppWinRT" Version="[2.0.250303.1]" />
+    <Reference Include="Windows"><HintPath>$(WindowsSdkDir)UnionMetadata\$(WindowsTargetPlatformVersion)\Windows.winmd</HintPath><IsWinMDFile>true</IsWinMDFile></Reference>
+    <ResourceCompile Include="resources.rc"><AdditionalIncludeDirectories>$(MSBuildThisFileDirectory);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories></ResourceCompile><ClCompile Include="main.cpp" />
+    <ClCompile Include="..\..\..\src\windows\storage\layout_store.cpp" />
+    <ClCompile Include="..\..\..\src\windows\storage\learning_store.cpp" />
+    <ClCompile Include="..\..\..\src\domain\src\config.cpp" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>
+
