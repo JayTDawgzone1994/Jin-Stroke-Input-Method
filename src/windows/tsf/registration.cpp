@@ -50,6 +50,7 @@ HRESULT register_server() noexcept {
         // The shell otherwise falls back to the language abbreviation (繁體),
         // even when RegisterProfile supplies a valid embedded branding icon.
         if (SUCCEEDED(hr)) hr = categories->RegisterCategory(service_id,GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT,service_id);
+        if (SUCCEEDED(hr)) hr = categories->RegisterCategory(service_id,GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,service_id);
         return hr;
     } catch (...) { return E_FAIL; }
 }
@@ -61,6 +62,8 @@ HRESULT unregister_server() noexcept {
     if (SUCCEEDED(hr)) hr = categories->UnregisterCategory(service_id,GUID_TFCAT_TIP_KEYBOARD,service_id);
     if (FAILED(hr)) first = hr;
     if (categories) {
+        hr = categories->UnregisterCategory(service_id,GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,service_id);
+        if (FAILED(hr) && SUCCEEDED(first)) first = hr;
         hr = categories->UnregisterCategory(service_id,GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT,service_id);
         if (FAILED(hr) && SUCCEEDED(first)) first = hr;
         hr = categories->UnregisterCategory(service_id,GUID_TFCAT_TIPCAP_UIELEMENTENABLED,service_id);

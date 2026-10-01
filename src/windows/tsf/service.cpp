@@ -2,6 +2,9 @@
 #include "keyboard_policy.hpp"
 #include "candidate_element.hpp"
 #include "write_session.hpp"
+#include "composition_attributes.hpp"
+#include <stroke/engine/continuous.hpp>
+#include <stroke/engine/association.hpp>
 #include "../storage/layout_store.hpp"
 #include "../storage/learning_store.hpp"
 #include "../storage/selection.hpp"
@@ -57,7 +60,8 @@ private:
 };
 
 class Service final : public ITfTextInputProcessorEx, public ITfKeyEventSink,
-                      public ITfThreadMgrEventSink, public ITfTextEditSink {
+                      public ITfThreadMgrEventSink, public ITfTextEditSink,
+                      public ITfCompositionSink, public ITfDisplayAttributeProvider {
 public:
     explicit Service(std::filesystem::path storage_root = {}) : storage_root_(std::move(storage_root)), view_(module) { ++live_objects; }
     ~Service() { cleanup(); --live_objects; }
@@ -69,11 +73,31 @@ public:
         else if (iid == IID_ITfKeyEventSink) *out = static_cast<ITfKeyEventSink*>(this);
         else if (iid == IID_ITfThreadMgrEventSink) *out = static_cast<ITfThreadMgrEventSink*>(this);
         else if (iid == IID_ITfTextEditSink) *out = static_cast<ITfTextEditSink*>(this);
+        else if (iid == IID_ITfCompositionSink) *out = static_cast<ITfCompositionSink*>(this);
+        else if (iid == IID_ITfDisplayAttributeProvider) *out = static_cast<ITfDisplayAttributeProvider*>(this);
         else return E_NOINTERFACE;
         AddRef(); return S_OK;
     }
     ULONG STDMETHODCALLTYPE AddRef() override { return ++refs_; }
     ULONG STDMETHODCALLTYPE Release() override { const ULONG r = --refs_; if (!r) delete this; return r; }
+    HRESULT STDMETHODCALLTYPE EnumDisplayAttributeInfo(IEnumTfDisplayAttributeInfo** out) override {
+        if (!out) return E_POINTER; *out = new(std::nothrow) CompositionAttributes; return *out ? S_OK : E_OUTOFMEMORY;
+    }
+    HRESULT STDMETHODCALLTYPE GetDisplayAttributeInfo(REFGUID id, ITfDisplayAttributeInfo** out) override {
+        if (!out) return E_POINTER; *out = nullptr;
+        if (id != composition_attribute_id) return E_INVALIDARG;
+        *out = new(std::nothrow) CompositionAttribute; return *out ? S_OK : E_OUTOFMEMORY;
+    }
+    HRESULT STDMETHODCALLTYPE OnCompositionTerminated(TfEditCookie cookie, ITfComposition* composition) override {
+        if (composition_.Get() == composition && !ending_composition_) {
+            ComPtr<ITfRange> range; ComPtr<ITfProperty> property;
+            if (context_ && SUCCEEDED(composition->GetRange(&range)) &&
+                SUCCEEDED(context_->GetProperty(GUID_PROP_ATTRIBUTE, &property))) (void)property->Clear(cookie, range.Get());
+            composition_.Reset(); rendered_.clear();
+            reset();
+        }
+        return S_OK;
+    }
     HRESULT STDMETHODCALLTYPE Activate(ITfThreadMgr* manager, TfClientId id) override { return ActivateEx(manager, id, 0); }
     HRESULT STDMETHODCALLTYPE ActivateEx(ITfThreadMgr* manager, TfClientId id, DWORD flags) override {
         if (!manager || id == TF_CLIENTID_NULL) return E_INVALIDARG;
@@ -83,6 +107,11 @@ public:
             auto data = IndexedDictionary::load(module_path().parent_path() / L"dictionary" / L"dictionary.sidx");
             if (std::holds_alternative<Error>(data)) return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
             dictionary_ = std::get<std::shared_ptr<const IndexedDictionary>>(data);
+            // A missing/corrupt/mismatched optional phrase file never disables basic input.
+            auto phrases = PhraseIndex::load(module_path().parent_path() / L"dictionary" / L"phrases" / L"phrases.pidx");
+            if (const auto* index = std::get_if<std::shared_ptr<const PhraseIndex>>(&phrases);
+                index && (*index)->stroke_version() == dictionary_->info().data_version) phrases_ = *index;
+            association_.configure(phrases_);
             settings_path_ = storage_root_.empty() ? layout_path() : storage_root_ / L"layout.dat";
             learning_path_ = storage_root_.empty() ? learning_path() : storage_root_ / L"learning.dat";
             poll_settings();
@@ -90,6 +119,9 @@ public:
             auto status = configure_session();
             if (std::holds_alternative<Error>(status)) return E_FAIL;
             manager_ = manager; client_ = id;
+            ComPtr<ITfCategoryMgr> categories;
+            if (SUCCEEDED(CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&categories))))
+                (void)categories->RegisterGUID(composition_attribute_id, &composition_atom_);
             HRESULT hr = manager_.As(&ui_manager_);
             if (FAILED(hr)) { cleanup(); return hr; }
             ComPtr<ITfKeystrokeMgr> keys;
@@ -146,9 +178,9 @@ public:
             *eaten = TRUE;
             if (key < swallowed_.size()) swallowed_[key] = true;
             if (pending_write_ || !queued_keys_.empty()) {
-                if (key == VK_ESCAPE) { reset(); return S_OK; }
+                if (key == VK_ESCAPE && !applied_layout_.continuous_input) { reset(); return S_OK; }
                 // Repeated selection keys must not select the next composition accidentally.
-                if (queued_keys_.empty() && ((key >= '1' && key <= '9') || key == VK_SPACE || key == VK_RETURN)) return S_OK;
+                if (!applied_layout_.continuous_input && queued_keys_.empty() && ((key >= '1' && key <= '9') || key == VK_SPACE || key == VK_RETURN)) return S_OK;
                 if (queued_keys_.size() < 128) queued_keys_.push_back({key, mods});
             } else {
                 process_key(context, key, mods);
@@ -159,7 +191,11 @@ public:
         }
     }
     void process_key(ITfContext* context, WPARAM key, Modifiers mods) {
+            if (applied_layout_.continuous_input) { process_continuous(context, key, mods); return; }
             if (const auto letter = english_letter(static_cast<unsigned int>(key), mods)) {
+                learning_context_.clear();
+                association_.reset(); association_anchor_.Reset();
+                if (association_active()) session_.reset();
                 insert(context, std::wstring(1, *letter), std::nullopt);
                 return;
             }
@@ -167,9 +203,12 @@ public:
                 (pending_layout_ != applied_layout_ || learning_dirty_)) (void)configure_session();
             auto state = session_.snapshot();
             Result<Update> result = Error{ErrorCode::invalid_argument, "Unknown key"};
-            if (key >= 'A' && key <= 'Z') result = session_.process_key(static_cast<char>(key-'A'+'a'));
+            if (key >= 'A' && key <= 'Z') {
+                if (association_active()) session_.reset();
+                result = session_.process_key(static_cast<char>(key-'A'+'a'));
+            }
             else if (key == VK_BACK) result = session_.process(Backspace{});
-            else if (key == VK_ESCAPE) result = session_.process(Cancel{});
+            else if (key == VK_ESCAPE) { learning_context_.clear(); association_.reset(); association_anchor_.Reset(); result = session_.process(Cancel{}); }
             else if (key == VK_NEXT || key == VK_PRIOR || key == VK_RIGHT || key == VK_LEFT)
                 result = session_.process(ChangePage{(key == VK_NEXT || key == VK_RIGHT)
                     ? PageDirection::next : PageDirection::previous});
@@ -180,7 +219,7 @@ public:
                 if (index < state.visible_candidates.size()) result = session_.process(SelectCandidate{state.revision,index});
             }
             if (auto* update = std::get_if<Update>(&result); update && update->commit) {
-                insert(context, utf16(update->commit->text), update->commit->revision);
+                insert(context, utf16(update->commit->text), update->commit->revision, update->commit->text.front());
             }
             if (!pending_write_) show(context);
     }
@@ -233,11 +272,18 @@ private:
     }
     void poll_learning() noexcept {
         try {
-            auto result = sync_learning(learning_path_, learning_.generation, pending_uses_);
+            auto result = sync_learning(learning_path_, learning_.generation, pending_uses_, pending_phrases_);
             if (const auto* state = std::get_if<LearningState>(&result)) {
+                if (state->generation != learning_.generation) learning_context_.clear();
+                if (state->phrases != learning_.phrases || state->enabled != learning_.enabled || personal_dirty_ || !personal_snapshot_) {
+                    personal_snapshot_ = std::make_shared<const PersonalPhrases>(state->phrases);
+                    personal_dirty_ = false;
+                }
+                association_.set_personal(personal_snapshot_, state->enabled);
                 if (*state != learning_ || !learning_ready_) learning_dirty_ = true;
                 learning_ = *state;
                 pending_uses_.clear();
+                pending_phrases_.clear();
                 learning_ready_ = true;
             }
         } catch (...) {} // Learning failures never change the host insertion result.
@@ -249,17 +295,19 @@ private:
         if (config.learning_enabled) {
             for (const auto& [cp, use] : learning_.uses) counts.emplace(cp, use.count);
         }
-        const auto result = session_.configure(dictionary_, config, std::move(counts));
+        const auto result = session_.configure(dictionary_, config, counts);
+        if (std::holds_alternative<Error>(result)) return result;
+        const auto continuous_result = continuous_.configure(dictionary_, config, std::move(counts), phrases_);
+        if (std::holds_alternative<Error>(continuous_result)) return continuous_result;
         if (std::holds_alternative<std::monostate>(result)) {
             applied_layout_ = pending_layout_;
-            applied_generation_ = learning_.generation;
             learning_dirty_ = false;
         }
         return result;
     }
-    void remember(char32_t cp) noexcept {
+    void remember(char32_t cp, const std::string& learning_generation, bool positioned = true) noexcept {
         try {
-            if (!learning_ready_ || !learning_.enabled || applied_generation_ != learning_.generation) return;
+            if (!learning_ready_ || !learning_.enabled || learning_generation.empty() || learning_generation != learning_.generation) return;
             auto& increment = pending_uses_[cp];
             if (increment.count < 1000000) ++increment.count;
             increment.last_used = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
@@ -267,6 +315,23 @@ private:
             auto& use = learning_.uses[cp];
             if (use.count < 1000000) ++use.count;
             use.last_used = increment.last_used;
+            if (!positioned || !is_personal_character(cp)) learning_context_.clear();
+            else {
+                learning_context_ += cp;
+                for (std::size_t length = 2; length <= std::min<std::size_t>(8, learning_context_.size()); ++length) {
+                    const auto word = learning_context_.substr(learning_context_.size() - length);
+                    if ((!learning_.phrases.contains(word) && learning_.phrases.size() >= personal_phrase_limit) ||
+                        (!pending_phrases_.contains(word) && pending_phrases_.size() >= personal_phrase_limit)) continue;
+                    auto& batch = pending_phrases_[word];
+                    if (batch.count < 1000000) ++batch.count;
+                    batch.last_used = increment.last_used;
+                    auto& learned = learning_.phrases[word];
+                    if (learned.count < 1000000) ++learned.count;
+                    learned.last_used = increment.last_used;
+                    personal_dirty_ = true;
+                }
+                if (learning_context_.size() > 7) learning_context_.erase(0, learning_context_.size() - 7);
+            }
             learning_dirty_ = true;
         } catch (...) {}
     }
@@ -279,8 +344,167 @@ private:
         return SUCCEEDED(context->GetStatus(&status)) && !(status.dwDynamicFlags & TS_SD_READONLY) &&
             !compartment(context, GUID_COMPARTMENT_KEYBOARD_DISABLED) && !compartment(context, GUID_COMPARTMENT_EMPTYCONTEXT);
     }
-    void insert(ITfContext* context, std::wstring text, std::optional<std::uint64_t> revision) {
+    bool association_active() const { return !session_.snapshot().association_prefix.empty(); }
+    bool association_position(ITfContext* context, TfEditCookie cookie) {
+        if (!association_anchor_) return false;
+        TF_SELECTION selection{}; ULONG fetched{};
+        const auto hr = context->GetSelection(cookie, TF_DEFAULT_SELECTION, 1, &selection, &fetched);
+        ComPtr<ITfRange> range; range.Attach(selection.range);
+        if (FAILED(hr) || fetched != 1 || !range) return false;
+        LONG start{}, end{};
+        return SUCCEEDED(range->CompareStart(cookie, association_anchor_.Get(), TF_ANCHOR_START, &start)) &&
+               SUCCEEDED(range->CompareEnd(cookie, association_anchor_.Get(), TF_ANCHOR_START, &end)) &&
+               start == 0 && end == 0;
+    }
+    void offer_association(char32_t cp) {
+        if (!applied_layout_.association_input || applied_layout_.continuous_input || !association_anchor_) {
+            association_.reset(); return;
+        }
+        try {
+            auto candidates = association_.accepted(cp);
+            if (!candidates.empty()) (void)session_.suggest(std::move(candidates), association_.context());
+        } catch (...) { association_.reset(); session_.reset(); }
+    }
+    bool idle() const { return session_.snapshot().phase == SessionPhase::idle && !continuous_.active() && !composition_; }
+    Session& query() { return applied_layout_.continuous_input ? continuous_.query() : session_; }
+    void process_continuous(ITfContext* context, WPARAM key, Modifiers mods) {
+        const auto letter = english_letter(static_cast<unsigned int>(key), mods);
+        if (letter && !continuous_.active()) { learning_context_.clear(); insert(context, std::wstring(1, *letter), std::nullopt); return; }
+        Result<ContinuousUpdate> result = ContinuousUpdate{};
+        if (letter) {
+            if (continuous_.choosing()) result = continuous_.select(0);
+            if (!std::holds_alternative<Error>(result)) result = continuous_.action(ContinuousAction::enter);
+        } else if (key >= 'A' && key <= 'Z') result = continuous_.key(static_cast<char>(key-'A'+'a'));
+        else if (key >= '1' && key <= '9') {
+            const auto count = query().snapshot().visible_candidates.size();
+            result = continuous_.select(candidate_index(static_cast<char>(key), applied_layout_.reverse_selection, count).value_or(count));
+        } else if (key == VK_NEXT || key == VK_PRIOR) {
+            if (!continuous_.choosing()) result = continuous_.action(ContinuousAction::candidates);
+            if (!std::holds_alternative<Error>(result)) (void)query().process(ChangePage{key == VK_NEXT ? PageDirection::next : PageDirection::previous});
+        } else {
+            const auto action = key == VK_SPACE ? ContinuousAction::next_character :
+                key == VK_RETURN ? ContinuousAction::enter : key == VK_LEFT ? ContinuousAction::left :
+                key == VK_RIGHT ? ContinuousAction::right : key == VK_DOWN ? ContinuousAction::candidates :
+                key == VK_BACK ? ContinuousAction::backspace : ContinuousAction::cancel;
+            result = continuous_.action(action);
+        }
+        if (std::holds_alternative<Error>(result)) { MessageBeep(MB_OK); show(context); return; }
+        auto update = std::get<ContinuousUpdate>(std::move(result));
+        auto text = utf16(continuous_.text());
+        auto caret = utf16(continuous_.text().substr(0, continuous_.text_cursor())).size();
+        if (letter && update.commit) text += *letter;
+        if (update.commit) caret = text.size();
+        sync_composition(context, std::move(text), static_cast<LONG>(caret), update.commit.has_value());
+        if (!pending_write_) show(context);
+    }
+    HRESULT edit_composition(ITfContext* context, TfEditCookie cookie, const std::wstring& text,
+                             LONG caret, bool finish, std::uint64_t generation) {
+        if (!composition_) {
+            if (text.empty()) return S_OK;
+            ComPtr<ITfInsertAtSelection> inserter;
+            ComPtr<ITfContextComposition> owner;
+            HRESULT hr = context->QueryInterface(IID_PPV_ARGS(&inserter));
+            if (FAILED(hr)) return hr;
+            hr = context->QueryInterface(IID_PPV_ARGS(&owner)); if (FAILED(hr)) return hr;
+            ComPtr<ITfRange> range;
+            hr = inserter->InsertTextAtSelection(cookie, TF_IAS_QUERYONLY, L"", 0, &range);
+            if (FAILED(hr) || !range) return FAILED(hr) ? hr : E_FAIL;
+            ComPtr<ITfComposition> created;
+            hr = owner->StartComposition(cookie, range.Get(), this, &created);
+            if (FAILED(hr) || !created) return FAILED(hr) ? hr : E_FAIL;
+            if (!valid_target(context, generation)) { (void)created->EndComposition(cookie); return TF_E_DISCONNECTED; }
+            composition_ = created; rendered_.clear();
+        }
+        const auto current = composition_;
+        ComPtr<ITfRange> range;
+        HRESULT hr = current->GetRange(&range); if (FAILED(hr)) return hr;
+        if (text != rendered_) {
+            hr = range->SetText(cookie, 0, text.data(), static_cast<LONG>(text.size()));
+            if (FAILED(hr)) return hr;
+            (void)current->ShiftEnd(cookie, range.Get());
+            rendered_ = text;
+        }
+        if (composition_.Get() != current.Get()) return TF_E_DISCONNECTED;
+        ComPtr<ITfProperty> property;
+        if (SUCCEEDED(context->GetProperty(GUID_PROP_ATTRIBUTE, &property))) {
+            if (finish || text.empty()) (void)property->Clear(cookie, range.Get());
+            else if (composition_atom_ != TF_INVALID_GUIDATOM) {
+                VARIANT value{}; value.vt = VT_I4; value.lVal = static_cast<LONG>(composition_atom_);
+                (void)property->SetValue(cookie, range.Get(), &value);
+            }
+        }
+        ComPtr<ITfRange> position;
+        if (SUCCEEDED(range->Clone(&position)) && SUCCEEDED(position->Collapse(cookie, TF_ANCHOR_START))) {
+            LONG moved{};
+            if (SUCCEEDED(position->ShiftEnd(cookie, caret, &moved, nullptr)) && moved == caret &&
+                SUCCEEDED(position->Collapse(cookie, TF_ANCHOR_END))) {
+                TF_SELECTION selection{position.Get(), {TF_AE_NONE, FALSE}};
+                (void)context->SetSelection(cookie, 1, &selection);
+            }
+        }
+        if (finish || text.empty()) {
+            ending_composition_ = true;
+            hr = current->EndComposition(cookie);
+            ending_composition_ = false;
+            if (SUCCEEDED(hr)) { composition_.Reset(); rendered_.clear(); }
+            return hr;
+        }
+        return S_OK;
+    }
+    void sync_composition(ITfContext* context, std::wstring text, LONG caret, bool finish) {
         const auto generation = ++generation_;
+        const auto learn_generation = learning_ready_ && learning_.enabled ? learning_.generation : std::string{};
+        pending_write_ = true;
+        ComPtr<Service> self(this);
+        ComPtr<WriteSession> edit;
+        edit.Attach(new WriteSession(context,
+            [self, context, text = std::move(text), caret, finish, generation](TfEditCookie cookie) {
+                return self->edit_composition(context, cookie, text, caret, finish, generation);
+            },
+            [self, context, generation] {
+                if (!self->valid_target(context, generation)) return false;
+                self->writing_ = true; return true;
+            },
+            [self, generation, finish, learn_generation](HRESULT hr) {
+                if (generation != self->generation_) return;
+                self->pending_write_ = false;
+                self->composition_failed_ = FAILED(hr);
+                if (FAILED(hr)) { self->writing_ = false; self->queued_keys_.clear(); }
+                if (finish) {
+                    self->learning_context_.clear();
+                    for (auto cp : self->continuous_.complete(SUCCEEDED(hr))) self->remember(cp, learn_generation);
+                    self->learning_context_.clear();
+                }
+                self->refresh_due_ = true;
+                if (self->settings_window_) PostMessageW(self->settings_window_, WM_APP + 1, 0, 0);
+            }));
+        edit->request(client_);
+        if (!pending_write_) writing_ = false;
+    }
+    void detach_composition() noexcept {
+        auto composition = composition_; composition_.Reset(); rendered_.clear();
+        if (!composition || !context_) return;
+        // End only this range; do not erase text after focus or an external edit changed it.
+        // The callback owns no Service reference, avoiding a composition/sink/service cycle.
+        try {
+            const auto context = context_;
+            ComPtr<WriteSession> edit;
+            edit.Attach(new WriteSession(context.Get(),
+                [composition, context](TfEditCookie cookie) {
+                    ComPtr<ITfRange> range; ComPtr<ITfProperty> property;
+                    if (SUCCEEDED(composition->GetRange(&range)) && SUCCEEDED(context->GetProperty(GUID_PROP_ATTRIBUTE, &property)))
+                        (void)property->Clear(cookie, range.Get());
+                    return composition->EndComposition(cookie);
+                }, [] { return true; }, [](HRESULT) {}));
+            edit->request(client_);
+        } catch (...) {}
+    }
+    void insert(ITfContext* context, std::wstring text, std::optional<std::uint64_t> revision,
+                std::optional<char32_t> committed = {}) {
+        const bool associated = association_active();
+        const auto generation = ++generation_;
+        const auto learn_generation = learning_ready_ && learning_.enabled ? learning_.generation : std::string{};
+        const auto positioned = std::make_shared<bool>(false);
         pending_write_ = true;
         // The queued callback keeps this COM object alive; reset invalidates its generation.
         ComPtr<Service> self(this);
@@ -290,18 +514,32 @@ private:
                 if (!self->valid_target(context, generation)) return false;
                 self->writing_ = true; return true;
             },
-            [self, generation, revision](HRESULT hr) {
+            [self, generation, revision, committed, associated, learn_generation, positioned](HRESULT hr) {
                 if (generation != self->generation_) return;
                 if (FAILED(hr)) self->writing_ = false;
                 self->pending_write_ = false;
+                if (associated && hr == TF_E_DISCONNECTED) { self->reset(); return; }
                 if (revision) {
                     const auto completed = self->session_.complete_commit(*revision, hr == S_OK);
-                    if (const auto* done = std::get_if<Update>(&completed); done && done->learned_character)
-                        self->remember(*done->learned_character);
+                    if (std::holds_alternative<Update>(completed) && hr == S_OK && committed) {
+                        self->remember(*committed, learn_generation, *positioned);
+                        self->offer_association(*committed);
+                    }
                 } else if (hr == S_OK) self->session_.reset();
                 if (hr != S_OK) self->queued_keys_.clear();
                 self->refresh_due_ = true;
                 if (self->settings_window_) PostMessageW(self->settings_window_, WM_APP + 1, 0, 0);
+            },
+            [self, positioned](ITfRange* range) {
+                *positioned = range != nullptr;
+                self->association_anchor_.Reset();
+                if (range)
+                    (void)range->Clone(&self->association_anchor_);
+            },
+            [self, context, associated](TfEditCookie cookie) {
+                const bool same_position = self->association_position(context, cookie);
+                if (!same_position) self->learning_context_.clear();
+                return !associated || same_position;
             }));
         edit->request(client_);
         // Synchronous OnEndEdit is normally inside RequestEditSession; asynchronous completion
@@ -334,7 +572,11 @@ private:
     }
     bool handles(ITfContext* context, WPARAM key, Modifiers mods) {
         if (!manager_ || !context) return false;
-        if ((pending_layout_ != applied_layout_ || learning_dirty_) && session_.snapshot().phase == SessionPhase::idle) {
+        if (pending_layout_ != applied_layout_ && association_active() && !pending_write_) {
+            reset();
+            if (!manager_) return false; // EndUIElement may re-enter Deactivate.
+        }
+        if ((pending_layout_ != applied_layout_ || learning_dirty_) && idle()) {
             (void)configure_session();
         }
         if (mods.shortcut()) return false;
@@ -343,10 +585,12 @@ private:
         if (compartment(context, GUID_COMPARTMENT_KEYBOARD_DISABLED) || compartment(context, GUID_COMPARTMENT_EMPTYCONTEXT)) return false;
         if (mods.shift) return english_letter(static_cast<unsigned int>(key), mods).has_value();
         if (key >= 'A' && key <= 'Z' && session_.handles_key(static_cast<char>(key-'A'+'a'))) return true;
-        if (context_.Get() != context || (!pending_write_ && session_.snapshot().phase == SessionPhase::idle)) return false;
+        if (context_.Get() != context || (!pending_write_ && idle())) return false;
+        if (association_active())
+            return (key >= '1' && key <= '9') || key == VK_ESCAPE || key == VK_NEXT || key == VK_PRIOR;
         return (key >= '1' && key <= '9') || key == VK_SPACE || key == VK_RETURN
             || key == VK_ESCAPE || key == VK_BACK || key == VK_NEXT || key == VK_PRIOR
-            || key == VK_LEFT || key == VK_RIGHT;
+            || key == VK_LEFT || key == VK_RIGHT || (applied_layout_.continuous_input && key == VK_DOWN);
     }
     bool bind(ITfContext* context) {
         if (context_.Get() == context) return true;
@@ -357,7 +601,8 @@ private:
         context_ = context; return true;
     }
     void show(ITfContext* context) {
-        if (session_.snapshot().phase == SessionPhase::idle) { end_ui(); return; }
+        if (applied_layout_.continuous_input && !continuous_.choosing() && !composition_failed_) { end_ui(); return; }
+        if (query().snapshot().phase == SessionPhase::idle) { end_ui(); return; }
         // Host UI callbacks may re-enter Deactivate/reset. Pin COM objects across those calls.
         ComPtr<ITfContext> target(context);
         const auto uiManager = ui_manager_;
@@ -374,16 +619,16 @@ private:
                 },
                 [this](std::vector<std::size_t> pages) -> HRESULT {
                     if (ui_allowed_) return E_INVALIDARG; // Native UI always uses its nine-key pages.
-                    const auto revision = session_.snapshot().revision;
-                    const auto result = session_.set_candidate_pages(std::move(pages));
+                    const auto revision = query().snapshot().revision;
+                    const auto result = query().set_candidate_pages(std::move(pages));
                     if (std::holds_alternative<Error>(result)) return E_INVALIDARG;
-                    if (session_.snapshot().revision == revision) return S_OK;
-                    if (element_) element_->update(session_);
+                    if (query().snapshot().revision == revision) return S_OK;
+                    if (element_) element_->update(query());
                     refresh_due_ = true;
                     if (settings_window_) PostMessageW(settings_window_, WM_APP + 1, 0, 0);
                     return S_OK;
                 }));
-            element_->update(session_);
+            element_->update(query());
             const auto current = element_;
             BOOL allowed = TRUE;
             ui_allowed_ = false;
@@ -395,17 +640,17 @@ private:
             if (FAILED(hr)) { element_->detach(); element_.Reset(); return; }
             ui_active_ = true; ui_allowed_ = allowed != FALSE;
         }
-        if (ui_allowed_ && session_.snapshot().phase == SessionPhase::composing && !session_.candidates().empty()) {
+        if (ui_allowed_ && query().snapshot().phase == SessionPhase::composing && !query().candidates().empty()) {
             std::vector<std::size_t> pages;
-            for (std::size_t i = 0; i < session_.candidates().size(); i += 9) pages.push_back(i);
-            (void)session_.set_candidate_pages(std::move(pages));
+            for (std::size_t i = 0; i < query().candidates().size(); i += 9) pages.push_back(i);
+            (void)query().set_candidate_pages(std::move(pages));
         }
-        element_->update(session_);
+        element_->update(query());
         const auto current = element_;
         if (ui_active_) (void)uiManager->UpdateUIElement(ui_id_);
         // UpdateUIElement may re-enter Show(FALSE).
         if (element_.Get() != current.Get() || !ui_allowed_) { view_.hide(); return; }
-        const auto snapshot = session_.snapshot();
+        const auto snapshot = query().snapshot();
         POINT anchor{100,100};
         GUITHREADINFO gui{sizeof(gui)};
         if (GetGUIThreadInfo(GetCurrentThreadId(), &gui) && gui.hwndCaret) {
@@ -436,8 +681,12 @@ private:
         if (active && ui_manager_) (void)ui_manager_->EndUIElement(ui_id_);
     }
     void reset() noexcept {
+        detach_composition();
+        continuous_.reset(); composition_failed_ = false;
         ++generation_; pending_write_ = false; writing_ = false;
         queued_keys_.clear(); refresh_due_ = false;
+        association_.reset(); association_anchor_.Reset();
+        learning_context_.clear();
         session_.reset(); end_ui();
         if (context_ && edit_cookie_ != TF_INVALID_COOKIE) {
             ComPtr<ITfSource> source;
@@ -446,7 +695,7 @@ private:
         edit_cookie_ = TF_INVALID_COOKIE; context_.Reset();
     }
     void cleanup() noexcept {
-        if (learning_ready_ && !pending_uses_.empty()) poll_learning();
+        if (learning_ready_ && (!pending_uses_.empty() || !pending_phrases_.empty())) poll_learning();
         if (settings_window_) { KillTimer(settings_window_, 1); DestroyWindow(settings_window_); settings_window_ = nullptr; }
         // Another service instance in the same module may still own a watcher.
         UnregisterClassW(L"StrokeIME.SettingsWatcher", module);
@@ -460,8 +709,9 @@ private:
         manager_cookie_ = TF_INVALID_COOKIE; keys_advised_ = false;
         ui_manager_.Reset();
         manager_.Reset(); client_ = TF_CLIENTID_NULL;
-        dictionary_.reset();
-        learning_ = {}; pending_uses_.clear(); applied_generation_.clear();
+        dictionary_.reset(); phrases_.reset();
+        learning_ = {}; pending_uses_.clear(); pending_phrases_.clear();
+        personal_snapshot_.reset(); personal_dirty_ = false;
         learning_ready_ = false; learning_dirty_ = true;
     }
     std::atomic<ULONG> refs_{1};
@@ -480,13 +730,24 @@ private:
     bool pending_write_{}, refresh_due_{}, draining_{};
     std::array<bool,256> swallowed_{};
     Session session_;
+    ContinuousSession continuous_;
+    Association association_;
+    ComPtr<ITfRange> association_anchor_;
+    ComPtr<ITfComposition> composition_;
+    TfGuidAtom composition_atom_{TF_INVALID_GUIDATOM};
+    std::wstring rendered_;
+    bool ending_composition_{}, composition_failed_{};
     std::shared_ptr<const IndexedDictionary> dictionary_;
+    std::shared_ptr<const PhraseIndex> phrases_;
     std::filesystem::path settings_path_;
     std::filesystem::path storage_root_;
     std::filesystem::path learning_path_;
     LearningState learning_;
     LearnedUses pending_uses_;
-    std::string applied_generation_;
+    PersonalPhrases pending_phrases_;
+    std::shared_ptr<const PersonalPhrases> personal_snapshot_;
+    std::u32string learning_context_;
+    bool personal_dirty_{};
     bool learning_ready_{}, learning_dirty_{true};
     Layout applied_layout_, pending_layout_;
     HWND settings_window_{};

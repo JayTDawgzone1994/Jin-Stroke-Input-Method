@@ -12,6 +12,7 @@
 
 namespace fs = std::filesystem;
 using namespace stroke;
+void build_phrases(const fs::path& source, const fs::path& index, const fs::path& output);
 void build_frequency(const fs::path& source, const fs::path& output);
 namespace {
 template <typename T> T take(Result<T> result) {
@@ -154,12 +155,16 @@ int run(const std::vector<std::string>& args) {
         if (args.size() == 2 && args[1] == "--help") {
             std::cout << "build --source DIR --output NEW_DIR [--scope traditional|all] [--overrides TSV ...]\n"
                          "frequency --source LIBCHEWING_DIR --output NEW_DIR\n"
+                         "phrases --source LIBCHEWING_DIR --index FILE --output NEW_DIR\n"
                          "inspect --index FILE\nquery --index FILE --strokes DIGITS\n"
                          "Build validates the full upstream reference before filtering; never overwrites an output bundle.\n";
             return 0;
         }
         if (args.size() < 2) { throw std::runtime_error("Use --help"); }
-        if (args[1] == "build") {
+        if (args[1] == "phrases") {
+            const auto options=parse(args,{"--source","--index","--output"});
+            build_phrases(path(required(options,"--source")),path(required(options,"--index")),path(required(options,"--output")));
+        } else if (args[1] == "build") {
             build_dictionary(parse(args, {"--source", "--output", "--scope", "--overrides"}));
         } else if (args[1] == "frequency") {
             const auto options = parse(args, {"--source", "--output"});

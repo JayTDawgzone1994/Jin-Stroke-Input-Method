@@ -1,3 +1,15 @@
+add_executable(stroke_association_tests unit/association.cpp)
+target_link_libraries(stroke_association_tests PRIVATE stroke::engine)
+stroke_configure_target(stroke_association_tests)
+add_test(NAME engine.association COMMAND stroke_association_tests)
+add_executable(stroke_phrase_tests unit/phrases.cpp)
+target_link_libraries(stroke_phrase_tests PRIVATE stroke::engine)
+stroke_configure_target(stroke_phrase_tests)
+add_test(NAME engine.phrases COMMAND stroke_phrase_tests)
+add_executable(stroke_continuous_tests unit/continuous.cpp)
+target_link_libraries(stroke_continuous_tests PRIVATE stroke::engine)
+stroke_configure_target(stroke_continuous_tests)
+add_test(NAME engine.continuous COMMAND stroke_continuous_tests)
 add_executable(stroke_contract_tests unit/contracts.cpp)
 target_link_libraries(stroke_contract_tests PRIVATE stroke::tsf_contract)
 stroke_configure_target(stroke_contract_tests)
@@ -11,6 +23,10 @@ target_link_libraries(stroke_learning_tests PRIVATE stroke::engine)
 stroke_configure_target(stroke_learning_tests)
 add_test(NAME engine.learning COMMAND stroke_learning_tests)
 if(WIN32 AND MSVC)
+    add_executable(stroke_tsf_editor WIN32 manual/tsf_editor.cpp)
+    target_link_libraries(stroke_tsf_editor PRIVATE ole32 uuid user32 gdi32)
+    target_compile_definitions(stroke_tsf_editor PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+    stroke_configure_target(stroke_tsf_editor)
     add_executable(stroke_tsf_host_tests unit/tsf_host.cpp "${PROJECT_SOURCE_DIR}/src/windows/ui/candidate_window.cpp")
     target_link_libraries(stroke_tsf_host_tests PRIVATE stroke::engine stroke_layout_store ole32 oleaut32 uuid user32 gdi32 advapi32)
     target_compile_definitions(stroke_tsf_host_tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
@@ -49,8 +65,9 @@ add_test(NAME settings.layouts COMMAND stroke_layout_tests)
 # Compile each public header on its own to prevent accidental transitive-include dependencies.
 set(public_headers
     stroke/domain/types.hpp stroke/domain/commands.hpp stroke/domain/config.hpp
-    stroke/dictionary/dictionary.hpp stroke/dictionary/index.hpp stroke/dictionary/text.hpp
-    stroke/engine/session.hpp
+    stroke/domain/personal_phrase.hpp
+    stroke/dictionary/dictionary.hpp stroke/dictionary/index.hpp stroke/dictionary/text.hpp stroke/dictionary/phrases.hpp
+    stroke/engine/session.hpp stroke/engine/continuous.hpp stroke/engine/phrase_rank.hpp stroke/engine/association.hpp
     stroke/storage/config_store.hpp stroke/ui/candidate_view.hpp stroke/tsf/context_token.hpp)
 set(header_sources)
 foreach(header IN LISTS public_headers)
@@ -64,6 +81,13 @@ target_link_libraries(stroke_header_checks PRIVATE stroke::tsf_contract)
 stroke_configure_target(stroke_header_checks)
 
 if(STROKE_BUILD_TOOLS)
+    add_test(NAME dictionary.phrase_source COMMAND ${CMAKE_COMMAND}
+        "-DBUILDER=$<TARGET_FILE:stroke_dict_builder>"
+        "-DTESTER=$<TARGET_FILE:stroke_phrase_tests>"
+        "-DSOURCE=${PROJECT_SOURCE_DIR}/data/upstream/libchewing-data"
+        "-DSTROKE_SOURCE=${PROJECT_SOURCE_DIR}/data/upstream/conway"
+        "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/phrase-data"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/integration/phrases.cmake")
     add_test(NAME dictionary.frequency_source COMMAND ${CMAKE_COMMAND}
         "-DBUILDER=$<TARGET_FILE:stroke_dict_builder>"
         "-DTESTER=$<TARGET_FILE:stroke_frequency_tests>"

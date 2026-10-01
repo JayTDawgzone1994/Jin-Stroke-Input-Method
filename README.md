@@ -2,14 +2,16 @@
 
 以 C++20 開發的 Windows 繁體中文筆畫輸入法，透過 Text Services Framework（TSF）整合到系統輸入法。
 
-目前版本 **0.5.0**，主要在 Windows 11 x64 驗證，提供 x64 與 x86 TSF 元件。仍屬早期版本，特殊應用程式與遊戲的相容性需要持續測試。
+目前公開版本 **0.5.0**，本機開發版 **0.9.0**，主要在 Windows 11 x64 驗證，提供 x64 與 x86 TSF 元件。仍屬早期版本，特殊應用程式與遊戲的相容性需要持續測試。
 
 ## 功能
 
 - 橫、豎、撇、點、折五類筆畫，以及萬用筆畫。
 - 左手 `QWE / ASD`、右手 `UIO / JKL`；提供兩種預設配置與自訂鍵位。
 - 常用字排序、本機使用頻率學習、反轉候選選字數字順序。
-- 候選框跟隨系統深淺色，支援圓角；左右方向鍵或 Page Up / Page Down 翻頁。
+- 逐字聯想：送出一字後顯示接續候選，可用數字繼續選字；設定自由開關。
+- 連續輸入模式：空白分字、整段底線、左右修字、詞庫預選常見詞、Enter 整段送出。
+- 候選框依內容調整大小、跟隨系統深淺色，支援圓角；左右方向鍵或 Page Up / Page Down 翻頁。
 - 按住 Shift 暫時輸入英文，大小寫依 Caps Lock；保留宿主的組合快捷鍵。
 - WinUI 3 設定程式「錦筆畫輸入法設定」。
 - TSF UILess 候選介面與非同步文字提交路徑。
@@ -30,12 +32,13 @@ cmake --build out/build/package-x64 --config Release --target stroke_dict_builde
 $builder = './out/build/package-x64/tools/dict_builder/Release/stroke_dict_builder.exe'
 & $builder build --source data/upstream/conway --output data/generated/conway-v2.0.2-traditional --scope traditional --overrides data/overrides/project.tsv
 & $builder frequency --source data/upstream/libchewing-data --output data/generated/conway-v2.0.2-traditional/frequency
+& $builder phrases --source data/upstream/libchewing-data --index data/generated/conway-v2.0.2-traditional/dictionary.sidx --output data/generated/conway-v2.0.2-traditional/phrases
 cmake --build out/build/package-x64 --config Release
 ctest --test-dir out/build/package-x64 -C Release --output-on-failure
 pwsh -NoProfile -File apps/settings/winui/build.ps1 -Restore
 ```
 
-字庫工具刻意拒絕覆寫既有輸出目錄。上面兩個資料生成命令只需在首次建置時執行；重新生成請先將舊輸出另存，再使用空的輸出路徑。上游快照已包含在儲存庫，不需要下載浮動版本。一般編譯與測試不會註冊輸入法。
+字庫工具刻意拒絕覆寫既有輸出目錄。上面三個資料生成命令只需在首次建置時執行；重新生成請先將舊輸出另存，再使用空的輸出路徑。上游快照已包含在儲存庫，不需要下載浮動版本。一般編譯與測試不會註冊輸入法。
 
 完成字庫後，可建立包含 x64、x86、設定程式與授權文件的安裝包：
 
@@ -59,14 +62,16 @@ pwsh -NoProfile -File packaging/build.ps1
 | `data/upstream` | 固定版本的上游資料與授權 |
 | `data/overrides` | 專案筆畫修正 |
 
-閱讀 [架構](docs/architecture.md)、[字庫](docs/dictionary.md)、[字頻](docs/frequency.md)、[學習](docs/learning.md)、[相容性](docs/tsf-compatibility.md) 與 [貢獻指南](CONTRIBUTING.md)。`docs/validation.md` 和研究筆記保留各開發階段的歷史紀錄；其中舊版本的限制或測試數量不代表目前狀態。
+閱讀 [架構](docs/architecture.md)、[字庫](docs/dictionary.md)、[字頻](docs/frequency.md)、[詞庫](docs/phrases.md)、[連續輸入](docs/continuous-input.md)、[聯想字](docs/association.md)、[學習](docs/learning.md)、[相容性](docs/tsf-compatibility.md) 與 [貢獻指南](CONTRIBUTING.md)。`docs/validation.md` 和研究筆記保留各開發階段的歷史紀錄；其中舊版本的限制或測試數量不代表目前狀態。
 
 ## 授權與致謝
 
 自行開發的程式碼採 [MIT License](LICENSE)。第三方內容各自保留原授權：
 
 - [Conway Stroke Data](https://github.com/stroke-input/stroke-input-data)：CC BY 4.0，提供筆畫資料。
-- [libchewing-data](https://codeberg.org/chewing/libchewing-data)：LGPL-2.1-or-later，提供單字排序分數；未連結新酷音引擎。
+- [libchewing-data](https://codeberg.org/chewing/libchewing-data)：LGPL-2.1-or-later，提供單字與詞語排序分數；未連結新酷音引擎。
 - WinUI / Windows App SDK 與執行階段：依隨附套件條款。
 
 完整來源、固定版本、修改說明與再散布文件見 [第三方聲明](THIRD_PARTY_NOTICES.md) 和 [來源備忘](note.md)。第三方字庫不因放入本專案而改為 MIT。
+
+個人詞庫在設定的「個人聯想詞庫」管理；聯想排序可學習前文與接字，常打的 2～8 字漢字片段重複三次後可加入聯想。詳見 [個人詞庫](docs/personal-words.md)。

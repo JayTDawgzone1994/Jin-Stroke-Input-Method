@@ -22,7 +22,7 @@ private:
     HWND window_{};
     HFONT font_{};
     std::wstring text_;
-    int height_{340};
+    int width_{160}, height_{280};
     COLORREF background_{RGB(250,250,250)};
     COLORREF foreground_{RGB(24,24,24)};
     COLORREF border_{RGB(210,210,210)};

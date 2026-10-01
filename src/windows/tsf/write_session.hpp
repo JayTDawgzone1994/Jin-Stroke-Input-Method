@@ -7,10 +7,16 @@ namespace stroke::win {
 // The host owns a reference while queued. Each callback executes at most once.
 class WriteSession final : public ITfEditSession {
 public:
+    using Work = std::function<HRESULT(TfEditCookie)>;
     using Begin = std::function<bool()>;
     using Finish = std::function<void(HRESULT)>;
-    WriteSession(ITfContext* context, std::wstring text, Begin begin, Finish finish)
-        : context_(context), text_(std::move(text)), begin_(std::move(begin)), finish_(std::move(finish)) { ++live_objects; }
+    using Inserted = std::function<void(ITfRange*)>;
+    using Position = std::function<bool(TfEditCookie)>;
+    WriteSession(ITfContext* context, std::wstring text, Begin begin, Finish finish,
+                 Inserted inserted = {}, Position position = {})
+        : context_(context), text_(std::move(text)), begin_(std::move(begin)), finish_(std::move(finish)), inserted_(std::move(inserted)), position_(std::move(position)) { ++live_objects; }
+    WriteSession(ITfContext* context, Work work, Begin begin, Finish finish)
+        : context_(context), begin_(std::move(begin)), finish_(std::move(finish)), work_(std::move(work)) { ++live_objects; }
     ~WriteSession() { --live_objects; }
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
         if (!out) return E_POINTER;
@@ -26,6 +32,8 @@ public:
         HRESULT hr = E_FAIL;
         try {
             if (!begin_()) hr = TF_E_DISCONNECTED;
+            else if (work_) hr = work_(cookie);
+            else if (position_ && !position_(cookie)) hr = TF_E_DISCONNECTED;
             else {
                 Microsoft::WRL::ComPtr<ITfInsertAtSelection> inserter;
                 hr = context_.As(&inserter);
@@ -34,10 +42,13 @@ public:
                     hr = inserter->InsertTextAtSelection(cookie, 0, text_.data(), static_cast<LONG>(text_.size()), &range);
                     if (SUCCEEDED(hr)) {
                         // A caret failure cannot undo a successful insertion or justify retrying it.
+                        bool placed = false;
                         if (range && SUCCEEDED(range->Collapse(cookie, TF_ANCHOR_END))) {
                             TF_SELECTION selection{range.Get(), {TF_AE_NONE, FALSE}};
-                            (void)context_->SetSelection(cookie, 1, &selection);
+                            placed = SUCCEEDED(context_->SetSelection(cookie, 1, &selection));
                         }
+                        // Observation failures must never turn an inserted character into a retry.
+                        if (inserted_) { try { inserted_(placed ? range.Get() : nullptr); } catch (...) {} }
                         hr = S_OK;
                     }
                 }
@@ -67,6 +78,9 @@ private:
     std::wstring text_;
     Begin begin_;
     Finish finish_;
+    Work work_;
+    Inserted inserted_;
+    Position position_;
     bool called_{}, finished_{};
 };
 }
