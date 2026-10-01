@@ -2,7 +2,7 @@
 
 以 C++20 開發的 Windows 繁體中文筆畫輸入法，透過 Text Services Framework（TSF）整合到系統輸入法。用五類筆畫查字，也可選擇連續組字或逐字聯想；詞庫與個人學習都在本機運作。
 
-`develop` 目前為 **0.9.0**。正式發布的版本與安裝包請見 [GitHub Releases](https://github.com/JayTDawgzone1994/Jin-Stroke-Input-Method/releases)，開發分支版本不代表已發布。主要在 Windows 11 x64 驗證，特殊應用程式與遊戲的相容性仍需持續測試。
+目前版本 **0.9.0**。正式發布的版本與安裝包請見 [GitHub Releases](https://github.com/JayTDawgzone1994/Jin-Stroke-Input-Method/releases)；`develop` 用於後續開發。主要在 Windows 11 x64 驗證，特殊應用程式與遊戲的相容性仍需持續測試。
 
 ## 安裝與更新
 
