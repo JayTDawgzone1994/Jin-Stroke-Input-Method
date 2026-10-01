@@ -15,6 +15,7 @@ struct SessionSnapshot {
     std::uint64_t revision{};
     SessionPhase phase{SessionPhase::idle};
     StrokeSequence strokes;
+    std::u32string association_prefix;
     std::vector<Candidate> visible_candidates;
     std::size_t page_index{};
     std::size_t total_candidates{};
@@ -55,6 +56,10 @@ public:
     [[nodiscard]] Result<Update> process_key(char key);
     // Only the adapter may acknowledge actual host insertion. Failed insertion keeps composition.
     [[nodiscard]] Result<Update> complete_commit(std::uint64_t revision, bool succeeded);
+    // Show the contextual preselected character first when reopening a saved stroke query.
+    [[nodiscard]] Status prefer_candidate(char32_t character);
+    // Idle only. Reuses candidate paging and the commit/acknowledgment transaction for suggestions.
+    [[nodiscard]] Status suggest(std::vector<Candidate> candidates, std::u32string prefix);
     void reset() noexcept;
 
 private:

@@ -24,7 +24,7 @@ public:
     ULONG STDMETHODCALLTYPE Release() override { const auto r = --refs_; if (!r) delete this; return r; }
     HRESULT STDMETHODCALLTYPE GetDescription(BSTR* out) override {
         if (!out) return E_POINTER;
-        *out = SysAllocString(L"錦筆劃輸入法候選字"); return *out ? S_OK : E_OUTOFMEMORY;
+        *out = SysAllocString(association_ ? L"錦筆劃輸入法聯想字" : L"錦筆劃輸入法候選字"); return *out ? S_OK : E_OUTOFMEMORY;
     }
     HRESULT STDMETHODCALLTYPE GetGUID(GUID* out) override {
         if (!out) return E_POINTER;
@@ -80,6 +80,7 @@ public:
         *out = page_; return S_OK;
     }
     void update(const Session& session) {
+        association_ = !session.snapshot().association_prefix.empty();
         std::vector<std::wstring> strings;
         for (const auto& candidate : session.candidates()) {
             const char32_t cp = candidate.character;
@@ -99,6 +100,6 @@ private:
     std::vector<std::wstring> strings_;
     std::vector<UINT> pages_;
     UINT page_{};
-    bool shown_{};
+    bool shown_{}, association_{};
 };
 }

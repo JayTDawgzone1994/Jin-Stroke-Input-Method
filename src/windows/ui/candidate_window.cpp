@@ -30,13 +30,13 @@ void CandidateWindow::hide() noexcept {
 }
 void CandidateWindow::present(const SessionSnapshot& state, POINT anchor, HWND owner, bool reverse_selection) {
     if (state.phase == SessionPhase::idle) { hide(); return; }
-    text_ = L"錦筆劃  ";
+    text_ = state.association_prefix.empty() ? L"" : L"聯想  " + utf16(state.association_prefix);
     constexpr wchar_t marks[] = L"一丨丿丶フ＊";
     const auto offset = state.strokes.size() > 24 ? state.strokes.size() - 24 : 0;
     if (offset) text_ += L"…";
     for (auto i = offset; i < state.strokes.size(); ++i)
         text_ += marks[static_cast<unsigned>(state.strokes[i]) - 1];
-    text_ += L"\n";
+    if (!text_.empty()) text_ += L"\n";
     for (std::size_t i = 0; i < state.visible_candidates.size(); ++i) {
         text_ += static_cast<wchar_t>(candidate_digit(i, reverse_selection));
         text_ += L".  ";
@@ -45,10 +45,26 @@ void CandidateWindow::present(const SessionSnapshot& state, POINT anchor, HWND o
         text_ += state.visible_candidates[i].exact_match ? L"  ✓\n" : L"\n";
     }
     if (state.visible_candidates.empty()) text_ += L"無候選字\n";
-    text_ += L"第 " + std::to_wstring(state.page_index + 1) + L" 頁 / "
-        + std::to_wstring(std::max<std::size_t>(1, (state.total_candidates + 8) / 9))
-        + L" 頁";
-    height_ = 76 + static_cast<int>(std::max<std::size_t>(1, state.visible_candidates.size())) * 28;
+    text_ += std::to_wstring(state.page_index + 1) + L" / "
+        + std::to_wstring(std::max<std::size_t>(1, (state.total_candidates + 8) / 9));
+    if (!font_) {
+        font_ = CreateFontW(-20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+            DEFAULT_PITCH, L"Microsoft JhengHei UI");
+    }
+    // Measure the same font, wrapping and padding used by paint; short pages shrink vertically too.
+    const HWND measuring = window_;
+    if (HDC dc = GetDC(measuring)) {
+        const auto old = font_ ? SelectObject(dc, font_) : nullptr;
+        RECT content{0, 0, 280, 0};
+        if (DrawTextW(dc, text_.c_str(), static_cast<int>(text_.size()), &content,
+                      DT_CALCRECT | DT_LEFT | DT_NOPREFIX | DT_WORDBREAK)) {
+            width_ = std::max(92, static_cast<int>(content.right + 24));
+            height_ = static_cast<int>(content.bottom + 16);
+        }
+        if (old) SelectObject(dc, old);
+        ReleaseDC(measuring, dc);
+    }
     if (!window_) {
         WNDCLASSEXW wc{sizeof(wc)};
         wc.lpfnWndProc = procedure;
@@ -59,22 +75,19 @@ void CandidateWindow::present(const SessionSnapshot& state, POINT anchor, HWND o
             throw std::runtime_error("Candidate class registration failed");
         window_ = CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
             wc.lpszClassName, L"錦筆劃輸入法候選字", WS_POPUP,
-            0, 0, 400, height_, owner, nullptr, instance_, this);
+            0, 0, width_, height_, owner, nullptr, instance_, this);
         if (!window_) throw std::runtime_error("Candidate window creation failed");
-        font_ = CreateFontW(-20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-            DEFAULT_PITCH, L"Microsoft JhengHei UI");
     }
     MONITORINFO monitor{sizeof(monitor)};
     if (GetMonitorInfoW(MonitorFromPoint(anchor, MONITOR_DEFAULTTONEAREST), &monitor)) {
-        anchor.x = std::max(monitor.rcWork.left, std::min(anchor.x, monitor.rcWork.right - 400));
+        anchor.x = std::max(monitor.rcWork.left, std::min(anchor.x, monitor.rcWork.right - width_));
         anchor.y = std::max(monitor.rcWork.top, std::min(anchor.y, monitor.rcWork.bottom - height_));
     }
     // Shell/search surfaces require an owned IME window and light-dismiss events.
     SetWindowLongPtrW(window_, GWLP_HWNDPARENT, reinterpret_cast<LONG_PTR>(owner));
     const bool wasVisible = IsWindowVisible(window_) != FALSE;
     if (!wasVisible) refresh_theme();
-    SetWindowPos(window_, HWND_TOPMOST, anchor.x, anchor.y, 400, height_, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    SetWindowPos(window_, HWND_TOPMOST, anchor.x, anchor.y, width_, height_, SWP_NOACTIVATE | SWP_SHOWWINDOW);
     NotifyWinEvent(wasVisible ? EVENT_OBJECT_IME_CHANGE : EVENT_OBJECT_IME_SHOW, window_, OBJID_CLIENT, CHILDID_SELF);
     InvalidateRect(window_, nullptr, TRUE);
 }
@@ -138,8 +151,8 @@ void CandidateWindow::paint() noexcept {
     SetTextColor(dc, foreground_);
     SetBkMode(dc, TRANSPARENT);
     HGDIOBJ old = font_ ? SelectObject(dc, font_) : nullptr;
-    area.left += 16; area.top += 12; area.right -= 12;
-    DrawTextW(dc, text_.c_str(), static_cast<int>(text_.size()), &area, DT_LEFT | DT_NOPREFIX);
+    area.left += 12; area.top += 8; area.right -= 12; area.bottom -= 8;
+    DrawTextW(dc, text_.c_str(), static_cast<int>(text_.size()), &area, DT_LEFT | DT_NOPREFIX | DT_WORDBREAK);
     if (old) SelectObject(dc, old);
     EndPaint(window_, &ps);
 }

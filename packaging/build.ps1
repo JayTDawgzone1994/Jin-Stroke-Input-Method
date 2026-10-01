@@ -36,8 +36,10 @@ foreach ($arch in @('x64', 'x86')) {
             throw "Missing frequency data or attribution: $required"
         }
     }
+    $phraseBundle = Join-Path $projectRoot ('out/phrases/' + [guid]::NewGuid().ToString('N'))
+    Invoke-BuildTool $dictTool @('phrases', '--source', 'data/upstream/libchewing-data', '--index', 'data/generated/conway-v2.0.2-traditional/dictionary.sidx', '--output', $phraseBundle)
     # Include corresponding conversion sources with the data, refreshed for this build.
-    Compress-Archive -Path src,tools,cmake,apps,tests,CMakeLists.txt,CMakePresets.json,LICENSE,THIRD_PARTY_NOTICES.md -DestinationPath (Join-Path $frequency 'converter-source.zip') -Force
+    Compress-Archive -Path src,tools,cmake,apps,tests,docs,packaging,CMakeLists.txt,CMakePresets.json,README.md,LICENSE,THIRD_PARTY_NOTICES.md -DestinationPath (Join-Path $frequency 'converter-source.zip') -Force
     Invoke-BuildTool $dictTool @('inspect', '--index', 'data/generated/conway-v2.0.2-traditional/dictionary.sidx')
     $destination = Join-Path $projectRoot "out/package/payload/$arch"
     New-Item -ItemType Directory -Force -Path $destination | Out-Null
@@ -50,6 +52,12 @@ foreach ($arch in @('x64', 'x86')) {
     $dict = Join-Path $destination 'dictionary'
     New-Item -ItemType Directory -Force -Path $dict | Out-Null
     Copy-Item -Path 'data/generated/conway-v2.0.2-traditional/*' -Destination $dict -Recurse -Force
+    $phraseDestination = Join-Path $dict 'phrases'
+    New-Item -ItemType Directory -Force -Path $phraseDestination | Out-Null
+    Copy-Item -Path (Join-Path $phraseBundle '*') -Destination $phraseDestination -Recurse -Force
+    foreach ($required in @('phrases.pidx','NOTICE.txt','sources/tsi.csv','sources/COPYING.LGPL-2.1.txt','sources/provenance.json','sources/source.zip')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $phraseDestination $required))) { throw "Missing phrase artifact: $required" }
+    }
     Invoke-BuildTool $dictTool @('inspect', '--index', (Join-Path $dict 'dictionary.sidx'))
 }
 & (Join-Path $projectRoot 'apps/settings/winui/build.ps1') -Restore
@@ -57,11 +65,11 @@ $settingsPayload = Join-Path $projectRoot 'out/package/payload/settings'
 New-Item -ItemType Directory -Force -Path $settingsPayload | Out-Null
 Copy-Item -Path 'out/build/settings-winui/x64/Release/*' -Destination $settingsPayload -Recurse -Force
 Invoke-BuildTool $Iscc @('packaging/StrokeIME.iss')
-$installer = Join-Path $projectRoot 'out/release/StrokeIME-Setup-0.5.0-win64.exe'
+$installer = Join-Path $projectRoot 'out/release/StrokeIME-Setup-0.9.0-win64.exe'
 $hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
 Set-Content -LiteralPath "$installer.sha256" -Value "$hash  $([IO.Path]::GetFileName($installer))" -Encoding ascii
 Copy-Item -LiteralPath 'packaging/quick-start.txt' -Destination 'out/release/使用說明.txt' -Force
-Compress-Archive -LiteralPath $installer, "$installer.sha256", 'out/release/使用說明.txt' -DestinationPath 'out/release/StrokeIME-0.5.0-win64.zip' -Force
+Compress-Archive -LiteralPath $installer, "$installer.sha256", 'out/release/使用說明.txt' -DestinationPath 'out/release/StrokeIME-0.9.0-win64.zip' -Force
 Write-Output $installer
 
 

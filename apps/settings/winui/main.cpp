@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <chrono>
 #include <windows.h>
 #undef GetCurrentTime
 #include "layout_store.hpp"
@@ -60,6 +62,8 @@ struct SettingsApp : ApplicationT<SettingsApp, Markup::IXamlMetadataProvider> {
     std::string preview;
     std::vector<Button> buttons;
     std::vector<TextBlock> key_labels;
+    PersonalPhrases personal_words;
+    std::vector<std::u32string> displayed_words;
     template <class T> T control(const wchar_t* name) { return root.FindName(name).as<T>(); }
     void status(const wchar_t* text, InfoBarSeverity severity = InfoBarSeverity::Informational) {
         auto bar = control<InfoBar>(L"Status");
@@ -68,6 +72,114 @@ struct SettingsApp : ApplicationT<SettingsApp, Markup::IXamlMetadataProvider> {
         bar.IsOpen(true);
     }
     bool dirty() const { return draft != saved || (available && learning != saved_learning); }
+    static std::wstring word_label(std::u32string_view text) {
+        std::wstring result;
+        for (auto cp : text) {
+            if (cp <= 0xFFFF)
+                result += static_cast<wchar_t>(cp);
+            else {
+                cp -= 0x10000;
+                result += static_cast<wchar_t>(0xD800 + (cp >> 10));
+                result += static_cast<wchar_t>(0xDC00 + (cp & 0x3FF));
+            }
+        }
+        return result;
+    }
+    static std::u32string word_input(std::wstring_view text) {
+        std::u32string result;
+        for (std::size_t i = 0; i < text.size(); ++i) {
+            char32_t cp = text[i];
+            if (cp >= 0xD800 && cp <= 0xDBFF) {
+                if (++i >= text.size() || text[i] < 0xDC00 || text[i] > 0xDFFF)
+                    return {};
+                cp = 0x10000 + ((cp - 0xD800) << 10) + (text[i] - 0xDC00);
+            }
+            result += cp;
+        }
+        return valid_personal_phrase(result) ? result : std::u32string{};
+    }
+    void filter_words() {
+        const std::wstring filter(control<TextBox>(L"WordText").Text());
+        std::vector<std::pair<std::u32string, PersonalPhrase>> visible;
+        std::size_t manual{}, automatic{};
+        for (const auto& [word, use] : personal_words) {
+            if (!use.manual && use.count < personal_phrase_threshold)
+                continue;
+            if (use.manual)
+                ++manual;
+            else
+                ++automatic;
+            if (word_label(word).find(filter) != std::wstring::npos)
+                visible.emplace_back(word, use);
+        }
+        std::sort(visible.begin(), visible.end(), [](const auto& a, const auto& b) {
+            if (a.second.manual != b.second.manual)
+                return a.second.manual > b.second.manual;
+            if (a.second.count != b.second.count)
+                return a.second.count > b.second.count;
+            return a.first < b.first;
+        });
+        displayed_words.clear();
+        auto items = single_threaded_observable_vector<IInspectable>();
+        for (std::size_t i = 0; i < std::min<std::size_t>(500, visible.size()); ++i) {
+            const auto& [word, use] = visible[i];
+            displayed_words.push_back(word);
+            auto label = word_label(word) + (use.manual ? L"　手動加入" : L"　自動學習");
+            if (use.count)
+                label += L" · " + std::to_wstring(use.count) + L" 次";
+            items.Append(box_value(label));
+        }
+        control<ListView>(L"WordList").ItemsSource(items);
+        control<Button>(L"RemoveWord").IsEnabled(false);
+        control<TextBlock>(L"WordCount")
+            .Text(L"手動 " + std::to_wstring(manual) + L"，自動 " + std::to_wstring(automatic) +
+                  L"；顯示 " + std::to_wstring(displayed_words.size()) +
+                  L" 筆（最多 500 筆，可輸入文字搜尋）。");
+    }
+    void show_words(const LearningState& state) {
+        personal_words = state.phrases;
+        filter_words();
+    }
+    bool refresh_words() {
+        auto state = sync_learning(learning_file);
+        if (auto value = std::get_if<LearningState>(&state)) {
+            show_words(*value);
+            return true;
+        }
+        status(L"無法讀取個人詞庫，請稍後重試。", InfoBarSeverity::Error);
+        return false;
+    }
+    bool add_word() {
+        auto word = word_input(std::wstring_view(control<TextBox>(L"WordText").Text()));
+        if (word.empty()) {
+            status(L"請輸入 2～8 個漢字。", InfoBarSeverity::Warning);
+            return false;
+        }
+        auto result = add_personal_phrase(learning_file, std::move(word));
+        if (auto state = std::get_if<LearningState>(&result)) {
+            show_words(*state);
+            control<TextBox>(L"WordText").Text(L"");
+            filter_words();
+            status(L"詞語已加入，下次聯想時生效。", InfoBarSeverity::Success);
+            return true;
+        }
+        status(L"無法新增詞語，請稍後重試或移除不需要的詞。", InfoBarSeverity::Error);
+        return false;
+    }
+    bool remove_word() {
+        const auto selected = control<ListView>(L"WordList").SelectedIndex();
+        if (selected < 0 || static_cast<std::size_t>(selected) >= displayed_words.size())
+            return false;
+        auto result = remove_personal_phrase(learning_file,
+                                             displayed_words[static_cast<std::size_t>(selected)]);
+        if (auto state = std::get_if<LearningState>(&result)) {
+            show_words(*state);
+            status(L"詞語已移除。", InfoBarSeverity::Success);
+            return true;
+        }
+        status(L"無法移除詞語，請稍後重試。", InfoBarSeverity::Error);
+        return false;
+    }
     void theme() {
         const BOOL dark = root.ActualTheme() == ElementTheme::Dark;
         DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
@@ -119,8 +231,13 @@ struct SettingsApp : ApplicationT<SettingsApp, Markup::IXamlMetadataProvider> {
     }
     void render() {
         updating = true;
+        if (draft.continuous_input)
+            draft.association_input = false;
         preview_active = false;
         control<ComboBox>(L"Mode").SelectedIndex(static_cast<int>(draft.mode));
+        control<ToggleSwitch>(L"Continuous").IsOn(draft.continuous_input);
+        control<ToggleSwitch>(L"Association").IsOn(draft.association_input);
+        control<ToggleSwitch>(L"Association").IsEnabled(!draft.continuous_input);
         control<ToggleSwitch>(L"Reverse").IsOn(draft.reverse_selection);
         control<ToggleSwitch>(L"Learning").IsOn(learning);
         control<ToggleSwitch>(L"Learning").IsEnabled(available);
@@ -286,8 +403,8 @@ struct SettingsApp : ApplicationT<SettingsApp, Markup::IXamlMetadataProvider> {
             ContentDialog dialog;
             dialog.XamlRoot(root.XamlRoot());
             dialog.Title(box_value(L"清除學習紀錄？"));
-            dialog.Content(
-                box_value(L"這台電腦累積的選字次數將被清除，無法復原。按鍵配置不會改變。"));
+            dialog.Content(box_value(L"單字與聯想的學習次數、自動學習的詞將被清除，無法復原。手動加"
+                                     L"入的詞及按鍵配置會保留。"));
             dialog.PrimaryButtonText(L"清除");
             dialog.CloseButtonText(L"取消");
             dialog.DefaultButton(ContentDialogButton::Close);
@@ -298,6 +415,7 @@ struct SettingsApp : ApplicationT<SettingsApp, Markup::IXamlMetadataProvider> {
                         learning = value->enabled;
                     saved_learning = value->enabled;
                     available = true;
+                    show_words(*value);
                     render();
                     status(L"學習紀錄已清除。", InfoBarSeverity::Success);
                 } else
@@ -363,9 +481,10 @@ struct SettingsApp : ApplicationT<SettingsApp, Markup::IXamlMetadataProvider> {
         }
         return CallNextHookEx(nullptr, code, wp, lp);
     }
-    Windows::Foundation::IAsyncAction snapshot(const wchar_t* name) {
+    Windows::Foundation::IAsyncAction snapshot(const wchar_t* name,
+                                               FrameworkElement target = nullptr) {
         Media::Imaging::RenderTargetBitmap bitmap;
-        co_await bitmap.RenderAsync(root);
+        co_await bitmap.RenderAsync(target ? target : root);
         auto buffer = co_await bitmap.GetPixelsAsync();
         std::vector<uint8_t> pixels(buffer.Length());
         Windows::Storage::Streams::DataReader::FromBuffer(buffer).ReadBytes(pixels);
@@ -386,6 +505,12 @@ struct SettingsApp : ApplicationT<SettingsApp, Markup::IXamlMetadataProvider> {
                   static_cast<std::streamsize>(pixels.size()));
         if (!out)
             throw std::runtime_error("snapshot write failed");
+    }
+    Windows::Foundation::IAsyncAction settle_ui() {
+        apartment_context ui;
+        co_await resume_after(std::chrono::milliseconds(100));
+        co_await ui;
+        root.UpdateLayout();
     }
     fire_and_forget smoke() {
         auto lifetime = get_strong();
@@ -433,6 +558,32 @@ struct SettingsApp : ApplicationT<SettingsApp, Markup::IXamlMetadataProvider> {
             if (control<TextBlock>(L"PreviewText").Text() != L"一 丨 丿 丶 フ ＊ ")
                 throw std::runtime_error("preview");
             draft.reverse_selection = true;
+            control<ToggleSwitch>(L"Association").IsOn(true);
+            if (!draft.association_input)
+                throw std::runtime_error("association switch");
+            control<ToggleSwitch>(L"Continuous").IsOn(true);
+            if (control<ToggleSwitch>(L"Association").IsEnabled() ||
+                control<ToggleSwitch>(L"Association").IsOn() || draft.association_input)
+                throw std::runtime_error("continuous clears association switch and preference");
+            control<ToggleSwitch>(L"Continuous").IsOn(false);
+            if (!control<ToggleSwitch>(L"Association").IsEnabled() ||
+                control<ToggleSwitch>(L"Association").IsOn() || draft.association_input)
+                throw std::runtime_error(
+                    "association remains off after returning to individual input");
+            control<ToggleSwitch>(L"Association").IsOn(true);
+            if (!apply())
+                throw std::runtime_error("save association mode");
+            auto association_saved = load_layout(layout_file);
+            if (!std::get<stroke::win::Layout>(association_saved).association_input ||
+                std::get<stroke::win::Layout>(association_saved).continuous_input)
+                throw std::runtime_error("association persistence");
+            control<ToggleSwitch>(L"Continuous").IsOn(true);
+            if (!draft.continuous_input)
+                throw std::runtime_error("continuous switch");
+            if (!control<InfoBar>(L"Status").IsOpen() ||
+                control<InfoBar>(L"Status").Message() !=
+                    L"連續輸入設定尚未儲存，請按「套用變更」生效。")
+                throw std::runtime_error("unsaved continuous reminder");
             learning = false;
             if (!apply())
                 throw std::runtime_error("save: " +
@@ -443,22 +594,66 @@ struct SettingsApp : ApplicationT<SettingsApp, Markup::IXamlMetadataProvider> {
             auto state = std::get<LearningState>(sync_learning(learning_file));
             if (state.enabled || !state.uses.empty() || dirty())
                 throw std::runtime_error("learning");
+            root.UpdateLayout();
+            auto scroll = control<ScrollViewer>(L"SettingsScroll");
+            scroll.ChangeView(nullptr, scroll.ScrollableHeight(), nullptr, true);
+            co_await settle_ui();
+            co_await snapshot(L"words-visible.bmp");
+            control<TextBox>(L"WordText").Text(L"錦筆劃");
+            if (!add_word() ||
+                !std::get<LearningState>(sync_learning(learning_file)).phrases.at(U"錦筆劃").manual)
+                throw std::runtime_error("manual word persistence while learning disabled");
+            control<TextBox>(L"WordText").Text(L"𠮷錦");
+            if (!add_word())
+                throw std::runtime_error("supplementary manual word");
+            control<TextBox>(L"WordText").Text(L"錦筆");
+            co_await settle_ui();
+            co_await snapshot(L"words-search.bmp", control<Border>(L"PersonalWords"));
+            if (displayed_words.size() != 1 || displayed_words.front() != U"錦筆劃")
+                throw std::runtime_error("personal dictionary search");
+            control<ListView>(L"WordList").SelectedIndex(0);
+            if (!remove_word() ||
+                std::get<LearningState>(sync_learning(learning_file)).phrases.contains(U"錦筆劃"))
+                throw std::runtime_error("manual word removal");
+            control<TextBox>(L"WordText").Text(L"錦筆劃");
+            if (!add_word())
+                throw std::runtime_error("restore manual preview word");
+            state = std::get<LearningState>(set_learning_enabled(learning_file, true));
+            state = std::get<LearningState>(sync_learning(learning_file, state.generation, {},
+                                                          {{U"我的名字", {3, 100, false}}}));
+            if (!refresh_words() || displayed_words.size() != 3)
+                throw std::runtime_error("automatic word management");
+            state = std::get<LearningState>(set_learning_enabled(learning_file, false));
             root.RequestedTheme(ElementTheme::Dark);
             if (root.ActualTheme() != ElementTheme::Dark)
                 throw std::runtime_error("dark theme");
+            co_await settle_ui();
             co_await snapshot(L"keyboard-dark.bmp");
+            co_await snapshot(L"habits-dark.bmp", control<Border>(L"Habits"));
+            co_await snapshot(L"words-dark.bmp", control<Border>(L"PersonalWords"));
             root.RequestedTheme(ElementTheme::Light);
             if (root.ActualTheme() != ElementTheme::Light)
                 throw std::runtime_error("light theme");
+            co_await settle_ui();
             co_await snapshot(L"keyboard-light.bmp");
+            control<ToggleSwitch>(L"Continuous").IsOn(false);
+            co_await snapshot(L"habits-light.bmp", control<Border>(L"Habits"));
+            co_await snapshot(L"words-light.bmp", control<Border>(L"PersonalWords"));
+            control<ToggleSwitch>(L"Continuous").IsOn(true);
             root.Width(600);
+            co_await settle_ui();
+            co_await snapshot(L"words-narrow.bmp", control<Border>(L"PersonalWords"));
+            scroll.ChangeView(nullptr, 0., nullptr, true);
+            co_await settle_ui();
             co_await snapshot(L"keyboard-narrow.bmp");
             root.Width(std::numeric_limits<double>::quiet_NaN());
             root.RequestedTheme(ElementTheme::Default);
             std::ofstream(test_root / L"result.txt")
                 << "PASS: keyboard presets, aliases, unbind, custom preservation, stroke preview, "
                    "reverse order, "
-                   "persistence, learning, theme switching\n";
+                   "mutually exclusive input modes, association persistence, personal dictionary, "
+                   "learning, theme "
+                   "switching\n";
         } catch (hresult_error const& e) {
             result_code = 1;
             std::ofstream(test_root / L"result.txt") << "FAIL: " << to_string(e.message());
@@ -500,8 +695,19 @@ struct SettingsApp : ApplicationT<SettingsApp, Markup::IXamlMetadataProvider> {
             if (auto value = std::get_if<LearningState>(&state)) {
                 learning = saved_learning = value->enabled;
                 available = true;
+                show_words(*value);
             }
             make_keyboard();
+            control<TextBox>(L"WordText").TextChanged([this](auto&&, auto&&) { filter_words(); });
+            control<ListView>(L"WordList").SelectionChanged([this](auto&&, auto&&) {
+                control<Button>(L"RemoveWord")
+                    .IsEnabled(control<ListView>(L"WordList").SelectedIndex() >= 0);
+            });
+            control<Button>(L"AddWord").Click([this](auto&&, auto&&) { (void)add_word(); });
+            control<Button>(L"RemoveWord").Click([this](auto&&, auto&&) { (void)remove_word(); });
+            control<Button>(L"RefreshWords").Click([this](auto&&, auto&&) {
+                (void)refresh_words();
+            });
             control<ComboBox>(L"Mode").SelectionChanged([this](auto&&, auto&&) {
                 if (!updating) {
                     auto index = control<ComboBox>(L"Mode").SelectedIndex();
@@ -519,6 +725,19 @@ struct SettingsApp : ApplicationT<SettingsApp, Markup::IXamlMetadataProvider> {
             });
             control<Button>(L"Preview").LostFocus([this](auto&&, auto&&) {
                 preview_active = false;
+            });
+            control<ToggleSwitch>(L"Association").Toggled([this](auto&&, auto&&) {
+                if (!updating) {
+                    draft.association_input = control<ToggleSwitch>(L"Association").IsOn();
+                    status(L"聯想字設定尚未儲存，請按「套用變更」生效。");
+                }
+            });
+            control<ToggleSwitch>(L"Continuous").Toggled([this](auto&&, auto&&) {
+                if (!updating) {
+                    draft.continuous_input = control<ToggleSwitch>(L"Continuous").IsOn();
+                    render();
+                    status(L"連續輸入設定尚未儲存，請按「套用變更」生效。");
+                }
             });
             control<ToggleSwitch>(L"Reverse").Toggled([this](auto&&, auto&&) {
                 if (!updating)

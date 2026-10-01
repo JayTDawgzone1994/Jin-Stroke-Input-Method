@@ -72,6 +72,44 @@ Status Session::set_candidate_pages(std::vector<std::size_t> pages) {
     pages_ = std::move(pages); state_ = std::move(next);
     return std::monostate{};
 }
+Status Session::prefer_candidate(char32_t character) {
+    if (state_.phase != SessionPhase::composing) return Error{ErrorCode::unavailable,"No candidate query"};
+    const auto found = std::find_if(candidates_.begin(),candidates_.end(),[&](auto& c) { return c.character==character; });
+    if (found == candidates_.end()) return Error{ErrorCode::invalid_argument,"Candidate not in query"};
+    std::rotate(candidates_.begin(),found,found+1);
+    pages_.clear();
+    for (std::size_t i=0;i<candidates_.size();i+=config_.page_size) pages_.push_back(i);
+    state_.page_index=0; state_.has_next_page=candidates_.size()>config_.page_size;
+    state_.visible_candidates.assign(candidates_.begin(),candidates_.begin()+static_cast<std::ptrdiff_t>(std::min(config_.page_size,candidates_.size())));
+    ++state_.revision;
+    return std::monostate{};
+}
+
+Status Session::suggest(std::vector<Candidate> candidates, std::u32string prefix) {
+    if (state_.phase != SessionPhase::idle || !dictionary_ || prefix.empty() || prefix.size() > 7)
+        return Error{ErrorCode::invalid_argument, "Cannot offer association candidates"};
+    for (auto cp : prefix)
+        if (!is_unicode_scalar(cp) || !cp)
+            return Error{ErrorCode::invalid_argument, "Invalid association prefix"};
+    for (auto& candidate : candidates) candidate.exact_match = false;
+    auto ordered = ranked(std::move(candidates), {}, false);
+    if (const auto* error = std::get_if<Error>(&ordered)) return *error;
+    auto next = std::get<std::vector<Candidate>>(std::move(ordered));
+    if (next.empty()) return std::monostate{};
+    std::vector<std::size_t> pages;
+    for (std::size_t i = 0; i < next.size(); i += config_.page_size) pages.push_back(i);
+    SessionSnapshot snapshot;
+    snapshot.revision = state_.revision + 1;
+    snapshot.phase = SessionPhase::composing;
+    snapshot.association_prefix = std::move(prefix);
+    snapshot.total_candidates = next.size();
+    const auto count = std::min(config_.page_size, next.size());
+    snapshot.visible_candidates.assign(next.begin(), next.begin() + static_cast<std::ptrdiff_t>(count));
+    snapshot.has_next_page = count < next.size();
+    candidates_ = std::move(next); pages_ = std::move(pages); state_ = std::move(snapshot);
+    return std::monostate{};
+}
+
 Update Session::update(bool consumed) const { return {consumed, state_, std::nullopt}; }
 
 bool Session::handles_key(char key) const noexcept {
@@ -191,6 +229,7 @@ void Session::reset() noexcept {
     ++state_.revision;
     state_.phase = SessionPhase::idle;
     state_.strokes.clear();
+    state_.association_prefix.clear();
     state_.visible_candidates.clear();
     state_.page_index = 0;
     state_.total_candidates = 0;

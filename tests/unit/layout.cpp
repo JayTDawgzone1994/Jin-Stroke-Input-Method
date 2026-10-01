@@ -105,7 +105,7 @@ int main() {
     auto migrated = decode_layout("SL15z-skdlquwieo");
     check(ok(migrated) && std::get<Layout>(migrated).reverse_selection &&
               map_key(layout_config(std::get<Layout>(migrated)), 'z') == Stroke::horizontal &&
-              encode_layout(std::get<Layout>(migrated)).starts_with("SL2"),
+              encode_layout(std::get<Layout>(migrated)).starts_with("SL4"),
           "Installed custom settings migrate without loss");
     check(!ok(decode_layout("SL12aaskdlaawieo")), "Conflicting legacy keys rejected");
     auto invalid = custom;
@@ -115,6 +115,41 @@ int main() {
     for (const auto* text :
          {"", "SL20000000000000", "SL19ajskdlquwieo", "SL10ajskdlquwieoextra", "SL10ajskdlquwie"})
         check(!ok(decode_layout(text)), "Malformed settings rejected");
+    auto continuous = custom;
+    continuous.continuous_input = true;
+    continuous.association_input = true;
+    auto serialized = encode_layout(continuous);
+    check(serialized.back() == '0', "Saving continuous input clears association mode");
+    continuous.association_input = false;
+    check(std::get<Layout>(decode_layout(serialized)) == continuous, "Continuous flag roundtrip");
+    auto conflicting = serialized;
+    conflicting.back() = '1';
+    check(std::get<Layout>(decode_layout(conflicting)) == continuous,
+          "Previously saved conflicting modes normalize to continuous only");
+    auto association = continuous;
+    association.continuous_input = false;
+    association.association_input = true;
+    check(std::get<Layout>(decode_layout(encode_layout(association))) == association,
+          "Association mode persists when continuous input is off");
+    auto old = serialized.substr(0, 30);
+    old[2] = '2';
+    auto old_layout = continuous;
+    old_layout.continuous_input = false;
+    old_layout.association_input = false;
+    check(std::get<Layout>(decode_layout(old)) == old_layout,
+          "SL2 preserves bindings and disables continuous mode");
+    auto previous = serialized.substr(0, 31);
+    previous[2] = '3';
+    auto previous_layout = continuous;
+    previous_layout.association_input = false;
+    check(std::get<Layout>(decode_layout(previous)) == previous_layout,
+          "SL3 preserves continuous mode and defaults associations off");
+    auto invalid_continuous = serialized;
+    invalid_continuous[30] = '2';
+    check(!ok(decode_layout(invalid_continuous)), "Invalid continuous flag rejected in SL4");
+    serialized.back() = '2';
+    check(!ok(decode_layout(serialized)), "Invalid association flag rejected");
+    check(!ok(decode_layout(encode_layout(continuous) + "0")), "Trailing settings bytes rejected");
     custom.custom.fill(0);
     check(valid_layout(custom) && layout_config(custom).bindings.empty(),
           "All slots can be disabled");
@@ -146,6 +181,8 @@ int main() {
     check(ok(loaded) && std::get<Layout>(loaded) == traditional, "Reload saved layout");
     auto reversed_saved = traditional;
     reversed_saved.reverse_selection = true;
+    reversed_saved.continuous_input = true;
+    reversed_saved.association_input = false;
     check(ok(save_layout(path, reversed_saved)), "Save reversed selection");
     loaded = load_layout(path);
     check(ok(loaded) && std::get<Layout>(loaded) == reversed_saved,

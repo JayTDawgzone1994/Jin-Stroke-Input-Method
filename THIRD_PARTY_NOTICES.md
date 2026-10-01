@@ -19,8 +19,8 @@
 - 固定快照：https://github.com/chewing/libchewing-data/tree/c44e81aef24b06f1509f19e1be54c99812d0c43f
 - 授權：**LGPL-2.1-or-later**，見 CSV 檔頭及 `data/upstream/libchewing-data/COPYING.LGPL-2.1.txt`。
 - 保存未修改的 CSV、完整 `source.zip` 及來源／SHA-256 紀錄 `provenance.json`。
-- 本專案擷取單一漢字的分數，多讀音取最高分，產生獨立字頻表；衍生字頻資料依原 LGPL 授權提供。未連結新酷音引擎。
-- 發布字頻表時保留其 NOTICE、LGPL 全文、可修改原始資料及對應轉換程式；安裝包的 `dictionary/frequency/` 包含這些資料與 `converter-source.zip`。
+- 本專案擷取單字分數及 2～8 字詞語，多讀音取最高分；詞語移除注音，依筆畫字庫篩選並產生獨立詞索引。衍生字頻與詞庫依原 LGPL 授權提供。未連結新酷音引擎。
+- 發布字頻表時保留其 NOTICE、LGPL 全文、可修改原始資料及對應轉換程式；安裝包的 `dictionary/frequency/` 包含字頻來源與 `converter-source.zip`；`dictionary/phrases/` 包含詞庫 NOTICE、報告、原始 CSV、LGPL 全文、provenance 與完整來源 ZIP，對應轉換程式同收於 frequency/converter-source.zip。
 
 ## Windows 設定介面與建置相依套件
 

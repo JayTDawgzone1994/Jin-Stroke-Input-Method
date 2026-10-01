@@ -18,6 +18,8 @@ struct Layout {
     LayoutMode mode{LayoutMode::standard};
     KeyBindings custom{preset_bindings(LayoutMode::standard)};
     bool reverse_selection{};
+    bool continuous_input{};
+    bool association_input{};
     bool operator==(const Layout&) const = default;
 };
 inline KeyBindings layout_keys(const Layout& layout) {
@@ -51,24 +53,36 @@ inline bool bind_key(Layout& layout, char key, unsigned char stroke) {
     return true;
 }
 inline std::string encode_layout(const Layout& layout) {
-    std::string text = "SL2";
+    std::string text = "SL4";
     text +=
         static_cast<char>('0' + static_cast<int>(layout.mode) + (layout.reverse_selection ? 3 : 0));
     for (auto stroke : layout.custom)
         text += static_cast<char>('0' + stroke);
+    text += layout.continuous_input ? '1' : '0';
+    text += layout.association_input && !layout.continuous_input ? '1' : '0';
     return text;
 }
 inline Result<Layout> decode_layout(std::string_view text) {
     const bool legacy = text.size() == 16 && text.substr(0, 3) == "SL1";
-    if ((!legacy && (text.size() != 30 || text.substr(0, 3) != "SL2")) || text[3] < '0' ||
+    const bool previous = text.size() == 31 && text.substr(0, 3) == "SL3";
+    const bool current = text.size() == 32 && text.substr(0, 3) == "SL4";
+    if ((!legacy && !previous && !current && (text.size() != 30 || text.substr(0, 3) != "SL2")) || text[3] < '0' ||
         text[3] > '5')
         return Error{ErrorCode::invalid_data, "Invalid layout format"};
     Layout result;
+    if (current || previous) {
+        if (text[30] != '0' && text[30] != '1') return Error{ErrorCode::invalid_data, "Invalid continuous option"};
+        result.continuous_input = text[30] == '1';
+    }
+    if (current) {
+        if (text[31] != '0' && text[31] != '1') return Error{ErrorCode::invalid_data, "Invalid association option"};
+        result.association_input = text[31] == '1';
+    }
     result.mode = static_cast<LayoutMode>((text[3] - '0') % 3);
     result.reverse_selection = text[3] >= '3';
     result.custom.fill(0);
     if (legacy) {
-        // Preserve installed settings; subsequent saves use SL2.
+        // Preserve installed settings; subsequent saves use SL4.
         for (std::size_t i = 0; i < 12; ++i) {
             const auto key = text[i + 4];
             if (key == '-')
@@ -88,6 +102,8 @@ inline Result<Layout> decode_layout(std::string_view text) {
             result.custom[i] = static_cast<unsigned char>(text[i + 4] - '0');
         }
     }
+    if (result.continuous_input)
+        result.association_input = false;
     return result;
 }
 } // namespace stroke::win

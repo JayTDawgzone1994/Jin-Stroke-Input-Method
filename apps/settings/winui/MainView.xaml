@@ -16,7 +16,7 @@
     </Style>
   </Grid.Resources>
   <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-  <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+  <ScrollViewer x:Name="SettingsScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
     <StackPanel Padding="32,28,32,28" Spacing="20" MaxWidth="960" HorizontalAlignment="Stretch">
       <Grid Margin="0,0,0,8">
         <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
@@ -52,17 +52,35 @@
           </Button>
         </StackPanel>
       </Border>
-      <Border Style="{StaticResource Card}">
+      <Border x:Name="Habits" Style="{StaticResource Card}">
         <StackPanel Spacing="16">
           <TextBlock Text="選字習慣" Style="{ThemeResource SubtitleTextBlockStyle}"/>
+          <ToggleSwitch x:Name="Association" Header="逐字模式顯示聯想字" OnContent="選字送出後，用數字接著選下一字" OffContent="不顯示聯想字"/>
+          <TextBlock Text="聯想字使用現有詞庫，按筆畫鍵回到查字；空白、Enter 與左右方向鍵維持原程式功能。開啟連續模式會自動關閉聯想字；切回逐字後可自行開啟。" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+          <ToggleSwitch x:Name="Continuous" Header="連續輸入模式" OnContent="空白進下一字，左右修字，Enter 送出整段" OffContent="逐字選字並送出"/>
+          <TextBlock Text="切換後請按下方「套用變更」。連續模式的文字會保留底線，直到 Enter 送出；左右移動後按下鍵換字。" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
           <ToggleSwitch x:Name="Reverse" Header="反轉選字鍵順序" OnContent="9 → 1，首字按 9" OffContent="1 → 9，首字按 1"/>
           <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
-          <ToggleSwitch x:Name="Learning" Header="學習常用字" OnContent="依本機選字次數，調整候選順序" OffContent="只使用字庫的常用字排序"/>
+          <ToggleSwitch x:Name="Learning" Header="學習常用字與聯想" OnContent="記住選字習慣，自動學習常用詞" OffContent="使用原字庫與手動加入的詞"/>
           <Grid ColumnSpacing="16">
             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-            <TextBlock Text="紀錄只保存在這台電腦。清除後無法復原。" TextWrapping="Wrap" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            <TextBlock Text="紀錄只保存在這台電腦。清除學習紀錄會保留手動加入的詞。" TextWrapping="Wrap" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
             <Button Grid.Column="1" x:Name="ClearLearning" Content="清除學習紀錄"/>
           </Grid>
+        </StackPanel>
+      </Border>
+      <Border x:Name="PersonalWords" Style="{StaticResource Card}">
+        <StackPanel Spacing="12">
+          <TextBlock Text="個人聯想詞庫" Style="{ThemeResource SubtitleTextBlockStyle}"/>
+          <TextBlock Text="成功輸出的 2～8 字漢字片段重複三次後會加入聯想。姓名或常用詞也能手動新增；新增、移除立即儲存。" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+          <TextBox x:Name="WordText" Header="搜尋或新增詞語" PlaceholderText="例如：錦筆劃（2～8 個漢字）" MaxLength="16"/>
+          <StackPanel Orientation="Horizontal" Spacing="12">
+            <Button x:Name="AddWord" Content="新增詞語"/>
+            <Button x:Name="RemoveWord" Content="移除選取詞語" IsEnabled="False"/>
+            <Button x:Name="RefreshWords" Content="重新整理"/>
+          </StackPanel>
+          <TextBlock x:Name="WordCount" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+          <ListView x:Name="WordList" MaxHeight="220" SelectionMode="Single" AutomationProperties.Name="個人聯想詞語"/>
         </StackPanel>
       </Border>
       <TextBlock Text="外觀會跟隨 Windows 的深色／淺色設定。" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
