@@ -685,6 +685,11 @@ struct SettingsApp : ApplicationT<SettingsApp, Markup::IXamlMetadataProvider> {
             check_hresult(window.as<IWindowNative>()->get_WindowHandle(&hwnd));
             SendMessageW(hwnd, WM_SETICON, ICON_BIG,
                          reinterpret_cast<LPARAM>(LoadIconW(module, MAKEINTRESOURCEW(101))));
+            if (test_root.empty()) {
+                const auto migrated = migrate_user_storage();
+                if (std::holds_alternative<Error>(migrated))
+                    throw std::runtime_error("無法移轉既有設定與學習資料。原始資料已保留，請稍後再試。");
+            }
             layout_file = test_root.empty() ? layout_path() : test_root / L"layout.dat";
             learning_file = test_root.empty() ? learning_path() : test_root / L"learning.dat";
             auto loaded = load_layout(layout_file);

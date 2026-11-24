@@ -85,6 +85,35 @@ int main() {
         check(take(session.action(ContinuousAction::enter)).commit == U"你",
               "Direct Enter commits a candidate, never the raw stroke preview");
         session.complete(true);
+        take(session.key('a'));
+        take(session.action(ContinuousAction::next_character));
+        take(session.key('s'));
+        take(session.action(ContinuousAction::discard_query));
+        check(session.text() == U"你" && !session.choosing(),
+              "Mode switch drops unfinished strokes while retaining the Chinese draft");
+        for (char32_t literal : std::u32string_view(U"ENG")) take(session.literal(literal));
+        check(session.text() == U"你ENG" && session.text_cursor() == 4 && !session.pending(),
+              "English joins the uncommitted Chinese draft");
+        check(!take(session.action(ContinuousAction::candidates)).consumed && !session.choosing(),
+              "An English character has no dictionary candidates");
+        for (int i = 0; i < 4; ++i) take(session.action(ContinuousAction::left));
+        take(session.action(ContinuousAction::candidates));
+        take(session.select(1));
+        check(session.text() == U"妳ENG", "Chinese remains reselectable beside literal English");
+        take(session.action(ContinuousAction::discard_query));
+        check(session.text() == U"妳ENG", "Repeated mode switch retains confirmed characters");
+        take(session.action(ContinuousAction::enter));
+        check(session.complete(false).empty() && session.text() == U"妳ENG",
+              "Rejected mixed commit preserves the full draft");
+        take(session.action(ContinuousAction::enter));
+        check(session.complete(true) == U"妳ENG", "Mixed text commits as one transaction");
+        take(session.key('q'));
+        take(session.literal(U'x'));
+        check(session.text() == U"x", "Temporary English does not convert an unfinished query");
+        take(session.action(ContinuousAction::backspace));
+        check(!session.active(), "Backspace can remove literal English");
+        check(std::holds_alternative<Error>(session.literal(U'你')) && !session.active(),
+              "Literal API cannot bypass Chinese dictionary selection");
         for (int i = 0; i < 256; ++i) {
             take(session.key('a'));
             take(session.action(ContinuousAction::next_character));

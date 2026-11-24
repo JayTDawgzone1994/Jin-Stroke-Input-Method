@@ -133,9 +133,11 @@ struct Document final : ITfDocumentMgr {
     STUB(Pop, (DWORD))
     STUB(EnumContexts, (IEnumTfContexts**))
 };
+#include "tsf_mode_fixture.hpp"
 struct Manager final : ITfThreadMgr, ITfUIElementMgr, ITfKeystrokeMgr, ITfSource {
     REFS;
     ITfDocumentMgr* focus{};
+    ModeInterfaces* modes{};
     ComPtr<ITfKeyEventSink> keys;
     ComPtr<ITfThreadMgrEventSink> events;
     ComPtr<ITfUIElement> element;
@@ -145,6 +147,8 @@ struct Manager final : ITfThreadMgr, ITfUIElementMgr, ITfKeystrokeMgr, ITfSource
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
         if (!out) return E_POINTER; *out = nullptr;
         if (iid == IID_IUnknown || iid == IID_ITfThreadMgr) *out = static_cast<ITfThreadMgr*>(this);
+        else if (modes && (iid == IID_ITfCompartmentMgr || iid == IID_ITfLangBarItemMgr))
+            return modes->QueryInterface(iid, out);
         else if (iid == IID_ITfUIElementMgr) *out = static_cast<ITfUIElementMgr*>(this);
         else if (iid == IID_ITfKeystrokeMgr) *out = static_cast<ITfKeystrokeMgr*>(this);
         else if (iid == IID_ITfSource) *out = static_cast<ITfSource*>(this);
@@ -211,6 +215,23 @@ void key(Manager& manager, Context& context, WPARAM code) {
     auto* service = static_cast<Service*>(keys.Get());
     check(service->key_down(&context, code, {}, &eaten) == S_OK && eaten, "Key consumed");
     (void)keys->OnKeyUp(&context, code, 0, &eaten);
+}
+void tap_shift(Service* service, Context& context, WPARAM shift = VK_LSHIFT) {
+    BOOL eaten{};
+    check(service->key_down(&context, shift, {.shift = true}, &eaten) == S_OK && eaten,
+          "Shift key down is owned without changing the draft");
+    check(service->OnTestKeyUp(&context, shift, 0, &eaten) == S_OK && eaten,
+          "Shift release test is side-effect free");
+    check(service->OnTestKeyUp(&context, shift, 0, &eaten) == S_OK && eaten,
+          "Repeated Shift release probe does not switch modes");
+    check(service->key_up(&context, shift, 0, {}, &eaten) == S_OK && eaten,
+          "Shift release switches once");
+}
+void modified_key(Service* service, Context& context, WPARAM code, Modifiers mods) {
+    BOOL eaten{};
+    check(service->key_down(&context, code, mods, &eaten) == S_OK && eaten,
+          "Modified English key consumed");
+    (void)service->OnKeyUp(&context, code, 0, &eaten);
 }
 int wmain(int argc, wchar_t** argv) {
     try {
@@ -589,6 +610,138 @@ int wmain(int argc, wchar_t** argv) {
         check(context.text==L"女子女子","Corrupt lexicon falls back to character priorities");
         key(manager,context,VK_ESCAPE); service->Deactivate(); service.Reset(); pump();
         check(live_objects==0,"Fallback lifetime cleanup");
+        // Shift modes use their own settings and learning fixture; never actual user files.
+        const auto shift_root = root / L"shift-mode";
+        check(std::holds_alternative<std::monostate>(save_layout(shift_root / L"layout.dat", continuous_layout)),
+              "Save mixed input fixture");
+        context.text.clear(); context.caret = 0; context.async = false;
+        service.Attach(new Service(shift_root));
+        check(service->ActivateEx(&manager, 1, 0) == S_OK, "Mixed input activation");
+        key(manager, context, 'A');
+        tap_shift(service.Get(), context);
+        check(context.text.empty() && !context.active_composition,
+              "Mode switch cancels only unfinished stroke text");
+        key(manager, context, 'A'); key(manager, context, 'B');
+        check(context.text == L"ab" && !context.active_composition,
+              "English without Chinese draft has no underline");
+        tap_shift(service.Get(), context, VK_RSHIFT);
+        key(manager, context, 'A'); key(manager, context, VK_SPACE); key(manager, context, 'S');
+        check(context.text == L"ab女丨", "Mixed fixture retains unconfirmed strokes");
+        tap_shift(service.Get(), context);
+        check(context.text == L"ab女" && context.active_composition,
+              "Switch retains an editable Chinese draft");
+        for (const auto letter : {'E', 'N', 'G'})
+            modified_key(service.Get(), context, static_cast<WPARAM>(letter), {.caps_lock = true});
+        check(context.text == L"ab女ENG" && context.active_composition,
+              "English appends inside the Chinese composition");
+        key(manager, context, VK_DOWN);
+        check(!manager.element, "Literal English cannot open Chinese candidates");
+        for (int i = 0; i < 4; ++i) key(manager, context, VK_LEFT);
+        key(manager, context, VK_DOWN);
+        check(manager.element != nullptr, "Chinese can reopen candidates while English mode remains active");
+        key(manager, context, '2');
+        check(context.text == L"ab你ENG", "Reselection preserves English text and its order");
+        for (int i = 0; i < 3; ++i) key(manager, context, VK_RIGHT);
+        key(manager, context, VK_RETURN); pump();
+        check(context.text == L"ab你ENG" && !context.active_composition,
+              "Enter finalizes mixed text exactly once");
+        tap_shift(service.Get(), context);
+        key(manager, context, 'A'); key(manager, context, VK_SPACE);
+        BOOL shift_eaten{};
+        check(service->key_down(&context, VK_LSHIFT, {.shift = true}, &shift_eaten) == S_OK && shift_eaten,
+              "Hold Shift for temporary English");
+        modified_key(service.Get(), context, 'X', {.shift = true});
+        check(service->key_up(&context, VK_LSHIFT, 0, {}, &shift_eaten) == S_OK, "Release held Shift");
+        key(manager, context, 'S'); key(manager, context, VK_SPACE); key(manager, context, VK_RETURN); pump();
+        check(context.text == L"ab你ENG女x子" && !context.active_composition,
+              "Held Shift adds English without sending the draft or switching persistent mode");
+        context.async = true;
+        key(manager, context, 'A'); key(manager, context, VK_SPACE);
+        tap_shift(service.Get(), context);
+        key(manager, context, 'X');
+        for (int i = 0; i < 16 && context.queued; ++i) {
+            check(context.flush() == S_OK, "Queued mixed input update"); pump();
+        }
+        check(context.text.ends_with(L"女x") && context.active_composition,
+              "Async mode changes and English retain key order and Chinese draft");
+        key(manager, context, VK_RETURN);
+        for (int i = 0; i < 8 && context.queued; ++i) {
+            check(context.flush() == S_OK, "Queued mixed input commit"); pump();
+        }
+        check(!context.active_composition, "Async mixed Enter ends composition");
+        context.async = false;
+        tap_shift(service.Get(), context);
+        check(service->key_down(&context, VK_LSHIFT, {.shift = true}, &shift_eaten) == S_OK && shift_eaten,
+              "Start Shift selection chord");
+        check(service->key_down(&context, VK_LEFT, {.shift = true}, &shift_eaten) == S_OK && !shift_eaten,
+              "Shift arrow selection remains host-owned");
+        (void)service->key_up(&context, VK_LSHIFT, 0, {}, &shift_eaten);
+        key(manager, context, 'A'); key(manager, context, VK_SPACE);
+        check(context.active_composition != nullptr, "Shift selection chord did not switch to English");
+        key(manager, context, VK_RETURN); pump();
+        service->Deactivate(); service.Reset(); pump();
+        const auto mixed_learning = std::get<LearningState>(sync_learning(shift_root / L"learning.dat"));
+        check(!mixed_learning.uses.contains(U'E') && !mixed_learning.uses.contains(U'x') &&
+                  !mixed_learning.phrases.contains(U"女子"),
+              "English is not learned and separates Chinese learning fragments");
+        check(live_objects == 0, "Mixed input lifecycle cleanup");
+        const auto ordinary_shift_root = root / L"shift-ordinary";
+        check(std::holds_alternative<std::monostate>(save_layout(ordinary_shift_root / L"layout.dat", Layout{})),
+              "Save ordinary Shift mode fixture");
+        service.Attach(new Service(ordinary_shift_root));
+        check(service->ActivateEx(&manager, 1, 0) == S_OK, "Ordinary mode activation");
+        const auto before_ordinary_shift = context.text;
+        key(manager, context, 'A');
+        tap_shift(service.Get(), context);
+        check(context.text == before_ordinary_shift && !manager.element,
+              "Ordinary Shift clears the query without auto-selecting a Chinese candidate");
+        key(manager, context, 'Z');
+        check(context.text == before_ordinary_shift + L"z" && !context.active_composition,
+              "Ordinary persistent English does not create a composition");
+        tap_shift(service.Get(), context);
+        key(manager, context, 'A'); key(manager, context, '1'); pump();
+        check(context.text == before_ordinary_shift + L"z女", "Ordinary Chinese input resumes after Shift");
+        service->Deactivate(); service.Reset(); pump();
+        check(live_objects == 0, "Ordinary mode switch lifetime cleanup");
+        ModeInterfaces modes; manager.modes = &modes;
+        service.Attach(new Service(shift_root));
+        check(service->ActivateEx(&manager, 1, 0) == S_OK && modes.label() == L"中",
+              "Service registers its standard Chinese mode button");
+        tap_shift(service.Get(), context);
+        check(modes.english() && modes.label() == L"英" &&
+                  (modes.conversion.flags & TF_CONVERSIONMODE_FULLSHAPE) && (modes.changed & TF_LBI_ICON),
+              "Shift synchronizes the shell and preserves unrelated conversion flags");
+        ComPtr<ITfLangBarItemButton> retained_mode;
+        check(modes.item.As(&retained_mode) == S_OK &&
+                  retained_mode->OnClick(TF_LBI_CLK_LEFT, {}, nullptr) == S_OK &&
+                  !modes.english() && modes.label() == L"中", "Shell click uses the same mode transition");
+        modes.external_mode(true);
+        const auto before_external_mode = context.text;
+        key(manager, context, 'Z');
+        check(context.text == before_external_mode + L"z" && modes.label() == L"英",
+              "External Windows mode changes alter actual input and the displayed icon");
+        modes.external_mode(false);
+        context.async = true;
+        key(manager, context, 'A'); key(manager, context, VK_SPACE);
+        modes.external_mode(true);
+        key(manager, context, 'X');
+        for (int i = 0; i < 16 && context.queued; ++i) {
+            check(context.flush() == S_OK, "External mode async composition"); pump();
+        }
+        check(context.text.ends_with(L"女x") && context.active_composition && modes.label() == L"英",
+              "External mode transition queues behind the Chinese draft and before English");
+        key(manager, context, VK_RETURN);
+        for (int i = 0; i < 8 && context.queued; ++i) {
+            check(context.flush() == S_OK, "External mode async commit"); pump();
+        }
+        context.async = false;
+        service->Deactivate(); service.Reset(); pump();
+        check(!modes.item && !modes.conversion.sink &&
+                  retained_mode->OnClick(TF_LBI_CLK_LEFT, {}, nullptr) == TF_E_DISCONNECTED,
+              "Deactivation unhooks Windows state and detaches a retained shell item");
+        retained_mode.Reset(); manager.modes = nullptr;
+        check(live_objects == 0 && modes.refs == 1 && modes.conversion.refs == 1,
+              "Mode integration releases subscriptions and COM references");
         std::filesystem::remove_all(root);
         std::cout << "UILess lifecycle, host pages, async fallback, ordered keys, cancellation and learning passed\n";
         return 0;

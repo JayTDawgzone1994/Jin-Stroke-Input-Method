@@ -15,6 +15,9 @@ LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM w, LPARAM l) {
         editor = CreateWindowExW(WS_EX_CLIENTEDGE, MSFTEDIT_CLASS, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP |
                                  ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL, 16, 100, 760, 260,
                                  window, nullptr, nullptr, nullptr);
+        // RichEdit 4.1 disables TSF by default. Enable its actual text store so
+        // composition testing does not silently exercise the IMM compatibility context.
+        SendMessageW(editor, EM_SETEDITSTYLE, SES_USECTF, SES_USECTF);
         font = CreateFontW(32, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                            OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
                            DEFAULT_PITCH, L"Microsoft JhengHei UI");

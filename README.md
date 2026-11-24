@@ -2,7 +2,7 @@
 
 以 C++20 開發的 Windows 繁體中文筆畫輸入法，透過 Text Services Framework（TSF）整合到系統輸入法。用五類筆畫查字，也可選擇連續組字或逐字聯想；詞庫與個人學習都在本機運作。
 
-目前版本 **0.9.0**。正式發布的版本與安裝包請見 [GitHub Releases](https://github.com/JayTDawgzone1994/Jin-Stroke-Input-Method/releases)；`develop` 用於後續開發。主要在 Windows 11 x64 驗證，特殊應用程式與遊戲的相容性仍需持續測試。
+目前正式版本 **0.9.0**；`develop` 的 **0.10.0 本機測試版** 包含共用設定修正與 Shift 中英文模式。正式發布的版本與安裝包請見 [GitHub Releases](https://github.com/JayTDawgzone1994/Jin-Stroke-Input-Method/releases)。主要在 Windows 11 x64 驗證，特殊應用程式與遊戲的相容性仍需持續測試。
 
 ## 安裝與更新
 
@@ -31,6 +31,8 @@
 
 按住 `Shift` 暫時輸入英文，大小寫依 `Caps Lock`，宿主組合快捷鍵維持原功能。候選選字預設為 `1～9`，可在設定反轉為 `9～1`。
 
+`develop` 已加入單按 Shift 切換中英文、右下角「中／英」按鈕及中英混合草稿；兩架構各 24 項自動測試通過，並已在本機安裝 0.10.0，以原生 TSF RichEdit 驗證混合底線、中文改選及 Shift 組合操作；使用者已確認「中 劃／英 劃」。先前正式安裝包尚不包含。規格與驗證範圍見 [中英文模式](docs/input-mode.md)。
+
 ## 輸入模式
 
 預設逐字輸入，連續模式與逐字聯想都可自行開啟。
@@ -58,7 +60,7 @@
 
 個人詞目前用於**逐字聯想**；連續模式能教詞，整段預選仍使用固定詞庫。自動學習以字串片段計數，沒有語意斷詞。
 
-偏好與學習資料只存於 `%LOCALAPPDATA%\StrokeIME`，不讀取應用程式已有文件，不傳送網路，也不納入原始碼或發布包。詳見 [本機學習](docs/learning.md) 與 [個人詞庫](docs/personal-words.md)。
+偏好與學習資料只存於 `%USERPROFILE%\.jin-stroke-ime`，不讀取應用程式已有文件，不傳送網路，也不納入原始碼或發布包。詳見 [本機學習](docs/learning.md) 與 [個人詞庫](docs/personal-words.md)。
 
 ## 從原始碼建置
 

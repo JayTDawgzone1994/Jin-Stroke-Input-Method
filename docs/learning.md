@@ -25,7 +25,7 @@
 
 ## 資料與同步
 
-- 位置：目前 Windows 使用者的 `%LOCALAPPDATA%\StrokeIME\learning.dat`；安裝程式不覆蓋或刪除這個位置。
+- 位置：目前 Windows 使用者的 `%USERPROFILE%\.jin-stroke-ime\learning.dat`；安裝程式不覆蓋或刪除這個位置。
 - 保存單字碼點、2～8 字漢字片段、次數、最後使用時間及手動詞標記；不讀取應用程式現有文件，不保存應用程式名稱或完整輸入順序，不傳送網路資料。
 - 以 `learning.dat.lock` 的獨占檔案 handle 協調不同程序。遇到鎖忙立即返回，timer 下次重試，不等待鎖。
 - 在鎖內讀取最新資料，合併尚未確認寫入的增量，暫存檔完整寫入並 flush 後原子替換正式檔。失敗保留原檔及待寫批次。

@@ -1,4 +1,4 @@
-#define AppVersion "0.9.0"
+#define AppVersion "0.10.0"
 #define Root ".."
 #define Payload Root + "\out\package\payload"
 
@@ -99,7 +99,7 @@ begin
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
-var Code: Integer; Enabled: Boolean;
+var Code: Integer; Enabled, Migrated: Boolean;
 begin
   if CurStep = ssPostInstall then begin
     { These checks run before any registration changes. }
@@ -107,6 +107,11 @@ begin
       RaiseException('64-bit input method validation failed.');
     if not RunTool('x86', 'selftest "' + DllPath('x86') + '"') then
       RaiseException('32-bit input method validation failed.');
+    { Seed shared user data before registering a DLL that can be activated by a
+      packaged host. Otherwise that host could create defaults ahead of migration. }
+    Migrated := ExecAsOriginalUser(ToolPath('x64'), 'migrate-storage', '', SW_HIDE, ewWaitUntilTerminated, Code);
+    if (not Migrated) or (Code <> 0) then
+      RaiseException('Cannot migrate existing input method settings. Original data was preserved.');
     try
       if not RunTool('x64', 'register "' + DllPath('x64') + '"') then
         RaiseException('64-bit input method registration failed.');
@@ -147,8 +152,6 @@ begin
     end;
   end;
 end;
-
-
 
 
 

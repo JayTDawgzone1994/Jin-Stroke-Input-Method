@@ -7,8 +7,9 @@ struct DraftCharacter {
     char32_t character{};
     std::vector<Candidate> alternatives;
     bool locked{};
+    bool literal{}; // Original English text: editable, never a dictionary query.
 };
-enum class ContinuousAction { next_character, left, right, candidates, backspace, cancel, enter };
+enum class ContinuousAction { next_character, left, right, candidates, backspace, cancel, enter, discard_query };
 struct ContinuousUpdate {
     bool consumed{true};
     std::optional<std::u32string> commit;
@@ -28,6 +29,7 @@ class ContinuousSession {
     const std::vector<DraftCharacter>& draft() const noexcept { return draft_; }
     std::size_t cursor() const noexcept { return cursor_; }
     Result<ContinuousUpdate> key(char key);
+    Result<ContinuousUpdate> literal(char32_t character);
     Result<ContinuousUpdate> action(ContinuousAction action);
     Result<ContinuousUpdate> select(std::size_t index);
     std::u32string text() const;

@@ -1,5 +1,7 @@
 #include "runtime.hpp"
 #include "keyboard_policy.hpp"
+#include "input_mode_button.hpp"
+#include <ctffunc.h>
 #include "candidate_element.hpp"
 #include "write_session.hpp"
 #include "composition_attributes.hpp"
@@ -23,6 +25,29 @@ Modifiers modifiers() noexcept {
     return {(GetKeyState(VK_SHIFT) & 0x8000) != 0, (GetKeyState(VK_CAPITAL) & 1) != 0,
         (GetKeyState(VK_CONTROL) & 0x8000) != 0, (GetKeyState(VK_MENU) & 0x8000) != 0,
         ((GetKeyState(VK_LWIN) | GetKeyState(VK_RWIN)) & 0x8000) != 0};
+}
+WPARAM shift_key(WPARAM key, LPARAM flags) noexcept {
+    if (key != VK_SHIFT) return key;
+    return ((static_cast<ULONG_PTR>(flags) >> 16) & 0xff) == 0x36 ? VK_RSHIFT : VK_LSHIFT;
+}
+std::optional<wchar_t> english_character(WPARAM key, Modifiers mods, bool english) noexcept {
+    if (const auto letter = english_letter(static_cast<unsigned int>(key), mods, english)) return letter;
+    if (!english || mods.shortcut() || key > 255) return std::nullopt;
+    BYTE keyboard[256]{};
+    if (!GetKeyboardState(keyboard)) return std::nullopt;
+    keyboard[VK_SHIFT] = keyboard[VK_LSHIFT] = mods.shift ? 0x80 : 0;
+    keyboard[VK_RSHIFT] = 0;
+    keyboard[VK_CAPITAL] = mods.caps_lock ? 1 : 0;
+    keyboard[VK_CONTROL] = keyboard[VK_LCONTROL] = keyboard[VK_RCONTROL] = 0;
+    keyboard[VK_MENU] = keyboard[VK_LMENU] = keyboard[VK_RMENU] = 0;
+    keyboard[VK_LWIN] = keyboard[VK_RWIN] = 0;
+    wchar_t text[8]{};
+    const auto layout = GetKeyboardLayout(0);
+    const auto count = ToUnicodeEx(static_cast<UINT>(key),
+        MapVirtualKeyExW(static_cast<UINT>(key), MAPVK_VK_TO_VSC, layout), keyboard, text, 8,
+        4, layout); // Windows 10 1607+: do not modify the keyboard's dead-key state.
+    if (count == 1 && text[0] >= L' ' && text[0] <= L'~') return text[0];
+    return std::nullopt;
 }
 class Edit final : public ITfEditSession {
 public:
@@ -61,7 +86,8 @@ private:
 
 class Service final : public ITfTextInputProcessorEx, public ITfKeyEventSink,
                       public ITfThreadMgrEventSink, public ITfTextEditSink,
-                      public ITfCompositionSink, public ITfDisplayAttributeProvider {
+                      public ITfCompositionSink, public ITfDisplayAttributeProvider,
+                      public ITfCompartmentEventSink {
 public:
     explicit Service(std::filesystem::path storage_root = {}) : storage_root_(std::move(storage_root)), view_(module) { ++live_objects; }
     ~Service() { cleanup(); --live_objects; }
@@ -75,6 +101,7 @@ public:
         else if (iid == IID_ITfTextEditSink) *out = static_cast<ITfTextEditSink*>(this);
         else if (iid == IID_ITfCompositionSink) *out = static_cast<ITfCompositionSink*>(this);
         else if (iid == IID_ITfDisplayAttributeProvider) *out = static_cast<ITfDisplayAttributeProvider*>(this);
+        else if (iid == IID_ITfCompartmentEventSink) *out = static_cast<ITfCompartmentEventSink*>(this);
         else return E_NOINTERFACE;
         AddRef(); return S_OK;
     }
@@ -87,6 +114,19 @@ public:
         if (!out) return E_POINTER; *out = nullptr;
         if (id != composition_attribute_id) return E_INVALIDARG;
         *out = new(std::nothrow) CompositionAttribute; return *out ? S_OK : E_OUTOFMEMORY;
+    }
+    HRESULT STDMETHODCALLTYPE OnChange(REFGUID id) override {
+        if (id != GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION || publishing_mode_ || !mode_compartment_)
+            return S_OK;
+        try {
+            VARIANT value; VariantInit(&value);
+            const auto result = mode_compartment_->GetValue(&value);
+            const bool valid = SUCCEEDED(result) && value.vt == VT_I4;
+            const bool english = valid && !(value.lVal & TF_CONVERSIONMODE_NATIVE);
+            VariantClear(&value);
+            if (valid) request_mode(focused_context().Get(), english);
+            return S_OK;
+        } catch (...) { return E_FAIL; }
     }
     HRESULT STDMETHODCALLTYPE OnCompositionTerminated(TfEditCookie cookie, ITfComposition* composition) override {
         if (composition_.Get() == composition && !ending_composition_) {
@@ -112,6 +152,7 @@ public:
             if (const auto* index = std::get_if<std::shared_ptr<const PhraseIndex>>(&phrases);
                 index && (*index)->stroke_version() == dictionary_->info().data_version) phrases_ = *index;
             association_.configure(phrases_);
+            if (storage_root_.empty()) (void)migrate_user_storage();
             settings_path_ = storage_root_.empty() ? layout_path() : storage_root_ / L"layout.dat";
             learning_path_ = storage_root_.empty() ? learning_path() : storage_root_ / L"learning.dat";
             poll_settings();
@@ -119,6 +160,8 @@ public:
             auto status = configure_session();
             if (std::holds_alternative<Error>(status)) return E_FAIL;
             manager_ = manager; client_ = id;
+            initialize_mode();
+            if (!manager_) return E_ABORT; // Shell item callbacks may deactivate reentrantly.
             ComPtr<ITfCategoryMgr> categories;
             if (SUCCEEDED(CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&categories))))
                 (void)categories->RegisterGUID(composition_attribute_id, &composition_atom_);
@@ -150,28 +193,60 @@ public:
     HRESULT STDMETHODCALLTYPE OnTestKeyDown(ITfContext* context, WPARAM key, LPARAM, BOOL* eaten) override {
         if (!eaten) return E_POINTER;
         *eaten = FALSE;
-        try { *eaten = handles(context, key, modifiers()); } catch (...) { return E_FAIL; }
+        try {
+            // Host-owned keys still invalidate an isolated Shift gesture.
+            if (!shift_bit(static_cast<unsigned int>(key))) shift_tap_.down(static_cast<unsigned int>(key), modifiers());
+            *eaten = handles(context, key, modifiers());
+        } catch (...) { return E_FAIL; }
         return S_OK;
     }
-    HRESULT STDMETHODCALLTYPE OnTestKeyUp(ITfContext*, WPARAM key, LPARAM, BOOL* eaten) override {
+    HRESULT STDMETHODCALLTYPE OnTestKeyUp(ITfContext*, WPARAM key, LPARAM lp, BOOL* eaten) override {
         if (!eaten) return E_POINTER;
+        if (const auto bit = shift_bit(static_cast<unsigned int>(shift_key(key, lp)))) {
+            *eaten = (shift_swallowed_ & bit) != 0;
+            return S_OK;
+        }
         *eaten = key < swallowed_.size() && swallowed_[key]; return S_OK;
     }
     HRESULT STDMETHODCALLTYPE OnKeyUp(ITfContext* context, WPARAM key, LPARAM lp, BOOL* eaten) override {
+        return key_up(context, key, lp, modifiers(), eaten);
+    }
+    HRESULT key_up(ITfContext* context, WPARAM key, LPARAM lp, Modifiers mods, BOOL* eaten) {
         const HRESULT hr = OnTestKeyUp(context, key, lp, eaten);
+        if (FAILED(hr)) return hr;
+        const auto physical = shift_key(key, lp);
+        if (const auto bit = shift_bit(static_cast<unsigned int>(physical))) {
+            shift_swallowed_ &= ~bit;
+            const bool toggle = shift_tap_.up(static_cast<unsigned int>(physical));
+            const bool same_context = shift_context_.Get() == context;
+            if (!shift_tap_.held()) shift_context_.Reset();
+            try {
+                if (toggle && same_context && keyboard_enabled(context, mods) && focused_context().Get() == context)
+                    request_mode(context, !effective_english());
+            } catch (...) { return E_FAIL; }
+            return S_OK;
+        }
         if (key < swallowed_.size()) swallowed_[key] = false;
         return hr;
     }
-    HRESULT STDMETHODCALLTYPE OnKeyDown(ITfContext* context, WPARAM key, LPARAM, BOOL* eaten) override {
-        return key_down(context, key, modifiers(), eaten);
+    HRESULT STDMETHODCALLTYPE OnKeyDown(ITfContext* context, WPARAM key, LPARAM lp, BOOL* eaten) override {
+        return key_down(context, shift_key(key, lp), modifiers(), eaten);
     }
     HRESULT key_down(ITfContext* context, WPARAM key, Modifiers mods, BOOL* eaten) {
         if (!eaten) return E_POINTER;
         *eaten = FALSE;
         try {
+            if (!shift_bit(static_cast<unsigned int>(key))) shift_tap_.down(static_cast<unsigned int>(key), mods);
             if (!handles(context, key, mods)) {
                 // A modifier press alone must not discard an unfinished stroke query.
                 if (key != VK_SHIFT && key != VK_LSHIFT && key != VK_RSHIFT && key != VK_CAPITAL) reset();
+                return S_OK;
+            }
+            if (const auto bit = shift_bit(static_cast<unsigned int>(key))) {
+                if (!shift_tap_.held()) shift_context_ = context;
+                shift_tap_.down(static_cast<unsigned int>(key), mods);
+                shift_swallowed_ |= bit;
+                *eaten = TRUE;
                 return S_OK;
             }
             if (!bind(context)) return S_OK;
@@ -180,7 +255,7 @@ public:
             if (pending_write_ || !queued_keys_.empty()) {
                 if (key == VK_ESCAPE && !applied_layout_.continuous_input) { reset(); return S_OK; }
                 // Repeated selection keys must not select the next composition accidentally.
-                if (!applied_layout_.continuous_input && queued_keys_.empty() && ((key >= '1' && key <= '9') || key == VK_SPACE || key == VK_RETURN)) return S_OK;
+                if (!effective_english() && !applied_layout_.continuous_input && queued_keys_.empty() && ((key >= '1' && key <= '9') || key == VK_SPACE || key == VK_RETURN)) return S_OK;
                 if (queued_keys_.size() < 128) queued_keys_.push_back({key, mods});
             } else {
                 process_key(context, key, mods);
@@ -192,7 +267,7 @@ public:
     }
     void process_key(ITfContext* context, WPARAM key, Modifiers mods) {
             if (applied_layout_.continuous_input) { process_continuous(context, key, mods); return; }
-            if (const auto letter = english_letter(static_cast<unsigned int>(key), mods)) {
+            if (const auto letter = english_character(key, mods, english_mode_)) {
                 learning_context_.clear();
                 association_.reset(); association_anchor_.Reset();
                 if (association_active()) session_.reset();
@@ -252,6 +327,121 @@ public:
         return S_OK;
     }
 private:
+    ComPtr<ITfContext> focused_context() const {
+        ComPtr<ITfDocumentMgr> document;
+        ComPtr<ITfContext> context;
+        if (manager_ && SUCCEEDED(manager_->GetFocus(&document)) && document)
+            (void)document->GetTop(&context);
+        return context;
+    }
+    bool effective_english() const noexcept {
+        bool english = english_mode_;
+        for (const auto& key : queued_keys_)
+            if (key.mode.has_value()) english = *key.mode;
+        return english;
+    }
+    bool keyboard_enabled(ITfContext* context, Modifiers mods) const {
+        if (!manager_ || !context || mods.shortcut()) return false;
+        TF_STATUS status{};
+        return SUCCEEDED(context->GetStatus(&status)) && !(status.dwDynamicFlags & TS_SD_READONLY) &&
+            !compartment(context, GUID_COMPARTMENT_KEYBOARD_DISABLED) &&
+            !compartment(context, GUID_COMPARTMENT_EMPTYCONTEXT);
+    }
+    void publish_mode() noexcept {
+        try {
+            if (mode_compartment_ && !publishing_mode_) {
+                const auto compartment = mode_compartment_;
+                VARIANT value; VariantInit(&value);
+                (void)compartment->GetValue(&value);
+                const LONG flags = value.vt == VT_I4 ? value.lVal : 0;
+                VariantClear(&value);
+                value.vt = VT_I4;
+                value.lVal = english_mode_ ? flags & ~TF_CONVERSIONMODE_NATIVE : flags | TF_CONVERSIONMODE_NATIVE;
+                publishing_mode_ = true;
+                (void)compartment->SetValue(client_, &value);
+                publishing_mode_ = false;
+            }
+            const auto button = mode_button_;
+            if (button) button->english(english_mode_);
+        } catch (...) { publishing_mode_ = false; }
+    }
+    void initialize_mode() {
+        const auto manager = manager_;
+        ComPtr<ITfCompartmentMgr> compartments;
+        if (SUCCEEDED(manager.As(&compartments)) &&
+            SUCCEEDED(compartments->GetCompartment(GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION, &mode_compartment_))) {
+            VARIANT value; VariantInit(&value);
+            if (SUCCEEDED(mode_compartment_->GetValue(&value)) && value.vt == VT_I4)
+                english_mode_ = !(value.lVal & TF_CONVERSIONMODE_NATIVE);
+            VariantClear(&value);
+            ComPtr<ITfSource> source;
+            if (SUCCEEDED(mode_compartment_.As(&source)))
+                (void)source->AdviseSink(IID_ITfCompartmentEventSink,
+                    static_cast<ITfCompartmentEventSink*>(this), &mode_cookie_);
+            publish_mode();
+        }
+        if (!manager_) return;
+        ComPtr<ITfLangBarItemMgr> bar;
+        if (SUCCEEDED(manager.As(&bar))) {
+            ComPtr<InputModeButton> button;
+            button.Attach(new InputModeButton(english_mode_, [this] {
+                ComPtr<Service> self(this);
+                const auto context = self->focused_context();
+                self->request_mode(context.Get(), !self->effective_english());
+            }));
+            langbar_manager_ = bar;
+            mode_button_ = button;
+            const auto result = bar->AddItem(button.Get());
+            if (mode_button_.Get() != button.Get()) {
+                button->detach();
+                if (SUCCEEDED(result)) (void)bar->RemoveItem(button.Get());
+            } else if (FAILED(result)) {
+                button->detach(); mode_button_.Reset(); langbar_manager_.Reset();
+            }
+        }
+    }
+    void cleanup_mode() noexcept {
+        auto button = mode_button_; mode_button_.Reset();
+        const auto bar = langbar_manager_; langbar_manager_.Reset();
+        const auto compartment = mode_compartment_; mode_compartment_.Reset();
+        const auto cookie = mode_cookie_; mode_cookie_ = TF_INVALID_COOKIE;
+        if (button) button->detach();
+        ComPtr<ITfSource> source;
+        if (compartment && cookie != TF_INVALID_COOKIE && SUCCEEDED(compartment.As(&source)))
+            (void)source->UnadviseSink(cookie);
+        if (button && bar) (void)bar->RemoveItem(button.Get());
+    }
+    void apply_mode(ITfContext* context, bool english) {
+        if (english_mode_ == english) return;
+        if (applied_layout_.continuous_input) {
+            const auto result = continuous_.action(ContinuousAction::discard_query);
+            if (std::holds_alternative<Error>(result)) return;
+        } else session_.reset();
+        english_mode_ = english;
+        learning_context_.clear(); association_.reset(); association_anchor_.Reset();
+        end_ui();
+        if (context && applied_layout_.continuous_input && (continuous_.active() || composition_)) {
+            const auto text = continuous_.text();
+            const auto caret = utf16(text.substr(0, continuous_.text_cursor())).size();
+            sync_composition(context, utf16(text), static_cast<LONG>(caret), false);
+        }
+        publish_mode();
+    }
+    void request_mode(ITfContext* context, bool english) {
+        if (!manager_ || effective_english() == english) return;
+        if (!context) {
+            reset();
+            english_mode_ = english;
+            publish_mode();
+            return;
+        }
+        if (!keyboard_enabled(context, {}) || !bind(context)) return;
+        if (pending_write_ || !queued_keys_.empty()) {
+            if (queued_keys_.size() < 128) queued_keys_.push_back({0, {}, english});
+            return;
+        }
+        apply_mode(context, english);
+    }
     static LRESULT CALLBACK settings_proc(HWND window, UINT message, WPARAM wp, LPARAM lp) {
         auto* self = reinterpret_cast<Service*>(GetWindowLongPtrW(window, GWLP_USERDATA));
         if (message == WM_NCCREATE) {
@@ -307,6 +497,7 @@ private:
     }
     void remember(char32_t cp, const std::string& learning_generation, bool positioned = true) noexcept {
         try {
+            if (!is_personal_character(cp)) { learning_context_.clear(); return; }
             if (!learning_ready_ || !learning_.enabled || learning_generation.empty() || learning_generation != learning_.generation) return;
             auto& increment = pending_uses_[cp];
             if (increment.count < 1000000) ++increment.count;
@@ -357,7 +548,7 @@ private:
                start == 0 && end == 0;
     }
     void offer_association(char32_t cp) {
-        if (!applied_layout_.association_input || applied_layout_.continuous_input || !association_anchor_) {
+        if (effective_english() || !applied_layout_.association_input || applied_layout_.continuous_input || !association_anchor_) {
             association_.reset(); return;
         }
         try {
@@ -368,12 +559,20 @@ private:
     bool idle() const { return session_.snapshot().phase == SessionPhase::idle && !continuous_.active() && !composition_; }
     Session& query() { return applied_layout_.continuous_input ? continuous_.query() : session_; }
     void process_continuous(ITfContext* context, WPARAM key, Modifiers mods) {
-        const auto letter = english_letter(static_cast<unsigned int>(key), mods);
-        if (letter && !continuous_.active()) { learning_context_.clear(); insert(context, std::wstring(1, *letter), std::nullopt); return; }
+        const bool selection_key = continuous_.choosing() && !mods.shift &&
+            ((key >= '1' && key <= '9') || key == VK_SPACE);
+        const auto letter = selection_key ? std::optional<wchar_t>{} : english_character(key, mods, english_mode_);
+        if (letter && !continuous_.active() && !composition_) {
+            learning_context_.clear(); insert(context, std::wstring(1, *letter), std::nullopt); return;
+        }
         Result<ContinuousUpdate> result = ContinuousUpdate{};
         if (letter) {
-            if (continuous_.choosing()) result = continuous_.select(0);
-            if (!std::holds_alternative<Error>(result)) result = continuous_.action(ContinuousAction::enter);
+            const bool has_draft = !continuous_.draft().empty();
+            result = continuous_.literal(static_cast<char32_t>(*letter));
+            // A stroke-only query is not a Chinese draft. Replace it with direct
+            // English and finish in one edit, without leaving an English underline.
+            if (!has_draft && !std::holds_alternative<Error>(result))
+                result = continuous_.action(ContinuousAction::enter);
         } else if (key >= 'A' && key <= 'Z') result = continuous_.key(static_cast<char>(key-'A'+'a'));
         else if (key >= '1' && key <= '9') {
             const auto count = query().snapshot().visible_candidates.size();
@@ -390,9 +589,9 @@ private:
         }
         if (std::holds_alternative<Error>(result)) { MessageBeep(MB_OK); show(context); return; }
         auto update = std::get<ContinuousUpdate>(std::move(result));
+        if (!update.consumed) { show(context); return; }
         auto text = utf16(continuous_.text());
         auto caret = utf16(continuous_.text().substr(0, continuous_.text_cursor())).size();
-        if (letter && update.commit) text += *letter;
         if (update.commit) caret = text.size();
         sync_composition(context, std::move(text), static_cast<LONG>(caret), update.commit.has_value());
         if (!pending_write_) show(context);
@@ -469,7 +668,10 @@ private:
                 if (generation != self->generation_) return;
                 self->pending_write_ = false;
                 self->composition_failed_ = FAILED(hr);
-                if (FAILED(hr)) { self->writing_ = false; self->queued_keys_.clear(); }
+                if (FAILED(hr)) {
+                    self->writing_ = false; self->queued_keys_.clear();
+                    self->publish_mode();
+                }
                 if (finish) {
                     self->learning_context_.clear();
                     for (auto cp : self->continuous_.complete(SUCCEEDED(hr))) self->remember(cp, learn_generation);
@@ -526,7 +728,7 @@ private:
                         self->offer_association(*committed);
                     }
                 } else if (hr == S_OK) self->session_.reset();
-                if (hr != S_OK) self->queued_keys_.clear();
+                if (hr != S_OK) { self->queued_keys_.clear(); self->publish_mode(); }
                 self->refresh_due_ = true;
                 if (self->settings_window_) PostMessageW(self->settings_window_, WM_APP + 1, 0, 0);
             },
@@ -555,7 +757,8 @@ private:
             while (!pending_write_ && !queued_keys_.empty() && context_) {
                 if (!valid_target(context_.Get(), generation_)) { reset(); break; }
                 const auto key = queued_keys_.front(); queued_keys_.pop_front();
-                process_key(context_.Get(), key.key, key.mods);
+                if (key.mode.has_value()) apply_mode(context_.Get(), *key.mode);
+                else process_key(context_.Get(), key.key, key.mods);
             }
             if (refresh_due_ && context_) { refresh_due_ = false; show(context_.Get()); }
         } catch (...) { reset(); }
@@ -579,11 +782,12 @@ private:
         if ((pending_layout_ != applied_layout_ || learning_dirty_) && idle()) {
             (void)configure_session();
         }
-        if (mods.shortcut()) return false;
-        TF_STATUS status{};
-        if (FAILED(context->GetStatus(&status)) || (status.dwDynamicFlags & TS_SD_READONLY)) return false;
-        if (compartment(context, GUID_COMPARTMENT_KEYBOARD_DISABLED) || compartment(context, GUID_COMPARTMENT_EMPTYCONTEXT)) return false;
-        if (mods.shift) return english_letter(static_cast<unsigned int>(key), mods).has_value();
+        if (!keyboard_enabled(context, mods)) return false;
+        if (shift_bit(static_cast<unsigned int>(key))) return true;
+        const bool selection_key = applied_layout_.continuous_input && continuous_.choosing() && !mods.shift &&
+            ((key >= '1' && key <= '9') || key == VK_SPACE);
+        if (!selection_key && english_character(key, mods, effective_english())) return true;
+        if (mods.shift) return false;
         if (key >= 'A' && key <= 'Z' && session_.handles_key(static_cast<char>(key-'A'+'a'))) return true;
         if (context_.Get() != context || (!pending_write_ && idle())) return false;
         if (association_active())
@@ -681,6 +885,8 @@ private:
         if (active && ui_manager_) (void)ui_manager_->EndUIElement(ui_id_);
     }
     void reset() noexcept {
+        const bool requested_mode = effective_english();
+        shift_tap_.cancel(); shift_context_.Reset();
         detach_composition();
         continuous_.reset(); composition_failed_ = false;
         ++generation_; pending_write_ = false; writing_ = false;
@@ -693,13 +899,20 @@ private:
             if (SUCCEEDED(context_.As(&source))) (void)source->UnadviseSink(edit_cookie_);
         }
         edit_cookie_ = TF_INVALID_COOKIE; context_.Reset();
+        if (english_mode_ != requested_mode) {
+            english_mode_ = requested_mode;
+            publish_mode();
+        }
     }
     void cleanup() noexcept {
         if (learning_ready_ && (!pending_uses_.empty() || !pending_phrases_.empty())) poll_learning();
         if (settings_window_) { KillTimer(settings_window_, 1); DestroyWindow(settings_window_); settings_window_ = nullptr; }
         // Another service instance in the same module may still own a watcher.
         UnregisterClassW(L"StrokeIME.SettingsWatcher", module);
+        cleanup_mode();
         reset(); swallowed_.fill(false);
+        shift_swallowed_ = 0;
+        english_mode_ = false;
         if (manager_) {
             ComPtr<ITfSource> source;
             if (manager_cookie_ != TF_INVALID_COOKIE && SUCCEEDED(manager_.As(&source))) (void)source->UnadviseSink(manager_cookie_);
@@ -724,11 +937,19 @@ private:
     TfClientId client_{TF_CLIENTID_NULL};
     DWORD manager_cookie_{TF_INVALID_COOKIE}, edit_cookie_{TF_INVALID_COOKIE};
     bool keys_advised_{}, writing_{};
-    struct QueuedKey { WPARAM key; Modifiers mods; };
+    struct QueuedKey { WPARAM key; Modifiers mods; std::optional<bool> mode{}; };
     std::deque<QueuedKey> queued_keys_;
     std::uint64_t generation_{};
     bool pending_write_{}, refresh_due_{}, draining_{};
     std::array<bool,256> swallowed_{};
+    ShiftTap shift_tap_;
+    ComPtr<ITfContext> shift_context_;
+    unsigned shift_swallowed_{};
+    bool english_mode_{}, publishing_mode_{};
+    ComPtr<ITfCompartment> mode_compartment_;
+    DWORD mode_cookie_{TF_INVALID_COOKIE};
+    ComPtr<ITfLangBarItemMgr> langbar_manager_;
+    ComPtr<InputModeButton> mode_button_;
     Session session_;
     ContinuousSession continuous_;
     Association association_;

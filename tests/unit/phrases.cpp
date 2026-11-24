@@ -88,6 +88,14 @@ int main(int argc, char** argv) {
         check(session.text() == U"女𠮷子", "Middle insertion invalidates old phrase");
         take(session.action(ContinuousAction::backspace));
         check(session.text() == U"你好", "Deleting inserted character restores phrase");
+        take(session.action(ContinuousAction::right));
+        for (char32_t literal : std::u32string_view(U"ENG")) take(session.literal(literal));
+        check(session.text() == U"你好ENG", "English does not rerank accepted Chinese text");
+        append('d'); append('q');
+        check(session.text() == U"你好ENG世界", "Phrase prediction preserves literal English between Chinese runs");
+        session.reset();
+        append('a'); take(session.literal(U'E')); append('s');
+        check(session.text() == U"女E子", "Phrase prediction cannot join Chinese across English");
         auto high = take(PhraseIndex::decode(
             take(encode_phrases({{U"妳好", 4000}, {U"你好", 1}}, "test", revision))));
         session.reset();

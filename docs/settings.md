@@ -25,7 +25,7 @@
 ## 維護邊界
 
 - `src/windows/storage/layout.hpp`：純 C++ 配置模型、預設、驗證、固定 32-byte SL4 格式（26 個字母各存一個 0～6 的筆畫值）；模式與自訂配置一起保存。
-- `layout_store.cpp`：Windows 使用者 LocalAppData/StrokeIME/layout.dat。先寫同目錄暫存檔並 FlushFileBuffers，再 MoveFileEx 原子替換；失敗保留原檔。x86/x64 共用同一份。
+- `layout_store.cpp`：Windows 使用者 `%USERPROFILE%\.jin-stroke-ime\layout.dat`。先寫同目錄暫存檔並 FlushFileBuffers，再 MoveFileEx 原子替換；失敗保留原檔。x86/x64 共用同一份。
 - `apps/settings/winui`：WinUI 3 圓角卡片、完整打字區鍵盤、即時驗證、試打與儲存提示。以執行緒內按鍵擷取避免輸入法攔截設定字母；內容可捲動，套用按鈕固定在底部。建置與部署見 [winui-settings-build.md](winui-settings-build.md)。
 - TSF service：每個啟用的服務透過 message-only window 的 500ms 計時器讀取最新設定，鍵盤回呼不存取設定檔。快取在 idle 才套用，不改動進行中的筆劃或待提交候選。停用時清理計時器和視窗。
 - 缺檔採標準模式；損壞／無法讀取時保留最近可用配置，首次啟用則採標準。設定視窗會提示讀取失敗。
@@ -34,9 +34,11 @@
 
 目前使用完整設定的小檔案輪詢，未加入跨程序通知或設定同步雲端。多個設定視窗同時套用時，以最後一次成功儲存為準。
 
+0.9.1 的共用位置與舊檔移轉見 [跨應用程式個人資料](shared-user-storage.md)。AppData 的宿主私有副本不再作為正式設定。
+
 ## 本地學習
 
-開發版新增「學習常用字與聯想」開關及「清除學習紀錄…」。開關變更需套用；停用保留紀錄。清除經確認後立即執行。資料在 LocalAppData 的 learning.dat，與 layout.dat 分開。完整行為及限制見 [learning.md](learning.md)。
+開發版新增「學習常用字與聯想」開關及「清除學習紀錄…」。開關變更需套用；停用保留紀錄。清除經確認後立即執行。資料在共用個人目錄的 learning.dat，與 layout.dat 分開。完整行為及限制見 [learning.md](learning.md)。
 
 
 ## 反轉選字鍵順序

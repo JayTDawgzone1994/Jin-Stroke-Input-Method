@@ -1,5 +1,6 @@
 #include "identity.hpp"
 #include "resources/resource.h"
+#include "layout_store.hpp"
 #include <windows.h>
 #include <msctf.h>
 #include <wrl/client.h>
@@ -23,6 +24,7 @@ struct Library {
     ~Library() { if (value) FreeLibrary(value); }
 };
 HRESULT enable(bool enabled) {
+    if (enabled && std::holds_alternative<stroke::Error>(migrate_user_storage())) return E_FAIL;
     Library lib{LoadLibraryExW(L"input.dll",nullptr,LOAD_LIBRARY_SEARCH_SYSTEM32)};
     if (!lib.value) return HRESULT_FROM_WIN32(GetLastError());
     const auto call = symbol<InstallTip>(lib.value,"InstallLayoutOrTip");
@@ -109,7 +111,7 @@ HRESULT verify_registered() {
 int wmain(int argc, wchar_t** argv) {
     if (argc < 2) {
         std::wcout << L"stroke_setup selftest|register|unregister DLL\n"
-                      L"stroke_setup enable|disable|status|activate|verify-registered\n";
+                      L"stroke_setup enable|disable|status|activate|verify-registered|migrate-storage\n";
         return 2;
     }
     HRESULT init = CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
@@ -119,6 +121,8 @@ int wmain(int argc, wchar_t** argv) {
         const std::wstring command=argv[1];
         if (command==L"verify-registered") hr=verify_registered();
         else if (command==L"enable" || command==L"disable") hr=enable(command==L"enable");
+        else if (command==L"migrate-storage")
+            hr=std::holds_alternative<stroke::Error>(migrate_user_storage()) ? E_FAIL : S_OK;
         else if (command==L"status" || command==L"activate") {
             ComPtr<ITfInputProcessorProfileMgr> profiles;
             hr=CoCreateInstance(CLSID_TF_InputProcessorProfiles,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&profiles));

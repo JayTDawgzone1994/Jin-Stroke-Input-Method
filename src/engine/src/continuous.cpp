@@ -61,6 +61,24 @@ Result<ContinuousUpdate> ContinuousSession::accept(std::size_t index, bool expli
     predict();
     return ContinuousUpdate{};
 }
+Result<ContinuousUpdate> ContinuousSession::literal(char32_t character) {
+    if (pending_)
+        return Error{ErrorCode::unavailable, "Commit pending"};
+    if (character < U' ' || character > U'~')
+        return Error{ErrorCode::invalid_argument, "Expected printable English text"};
+    if (draft_.size() >= 256)
+        return Error{ErrorCode::invalid_argument, "Composition length limit"};
+    // Discard only the unaccepted query, including a reopened candidate list.
+    // Already accepted Chinese characters keep their saved strokes and alternatives.
+    clear_query();
+    DraftCharacter slot;
+    slot.character = character;
+    slot.locked = true;
+    slot.literal = true;
+    draft_.insert(draft_.begin() + static_cast<std::ptrdiff_t>(cursor_), std::move(slot));
+    ++cursor_;
+    return ContinuousUpdate{};
+}
 Result<ContinuousUpdate> ContinuousSession::select(std::size_t index) {
     if (pending_)
         return Error{ErrorCode::unavailable, "Commit pending"};
@@ -71,6 +89,9 @@ Result<ContinuousUpdate> ContinuousSession::action(ContinuousAction action) {
         return Error{ErrorCode::unavailable, "Commit pending"};
     const bool has_query = !query_.snapshot().strokes.empty();
     switch (action) {
+    case ContinuousAction::discard_query:
+        clear_query();
+        return ContinuousUpdate{};
     case ContinuousAction::next_character:
         if (has_query)
             return accept(0);
@@ -110,6 +131,8 @@ Result<ContinuousUpdate> ContinuousSession::action(ContinuousAction action) {
             return ContinuousUpdate{false};
         {
             const auto target = cursor_ < draft_.size() ? cursor_ : draft_.size() - 1;
+            if (draft_[target].literal)
+                return ContinuousUpdate{false};
             // Replay a saved query; a failed replay never changes confirmed characters.
             for (const auto stroke : draft_[target].strokes) {
                 auto r = query_.process(AppendStroke{stroke});
@@ -153,18 +176,22 @@ Result<ContinuousUpdate> ContinuousSession::action(ContinuousAction action) {
 void ContinuousSession::predict() {
     if (!phrases_ || draft_.empty())
         return;
-    std::vector<std::vector<Candidate>> choices;
-    for (const auto& slot : draft_) {
-        if (slot.locked)
-            choices.push_back({Candidate{slot.character}});
-        else
-            choices.push_back(slot.alternatives);
+    // Literal text separates Chinese phrase runs and is never rewritten by prediction.
+    for (std::size_t start = 0; start < draft_.size();) {
+        if (draft_[start].literal) { ++start; continue; }
+        auto end = start;
+        std::vector<std::vector<Candidate>> choices;
+        while (end < draft_.size() && !draft_[end].literal) {
+            const auto& slot = draft_[end++];
+            choices.push_back(slot.locked ? std::vector<Candidate>{Candidate{slot.character}}
+                                          : slot.alternatives);
+        }
+        const auto text = predict_phrases(*phrases_, choices);
+        if (text.size() == end - start)
+            for (std::size_t i = 0; i < text.size(); ++i)
+                draft_[start + i].character = text[i];
+        start = end;
     }
-    auto text = predict_phrases(*phrases_, choices);
-    if (text.size() != draft_.size())
-        return;
-    for (std::size_t i = 0; i < draft_.size(); ++i)
-        draft_[i].character = text[i];
 }
 std::u32string ContinuousSession::text() const {
     std::u32string result;

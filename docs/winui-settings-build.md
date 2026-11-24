@@ -32,7 +32,7 @@ stroke_settings.exe --preview "D:\test-state" --theme dark
 stroke_settings.exe --preview "D:\test-state-light" --theme light
 ```
 
-省略預覽參數才會讀取 LocalAppData/StrokeIME 的正式設定，並跟隨 OS 主題。
+省略預覽參數才會讀取 `%USERPROFILE%\.jin-stroke-ime` 的正式設定，並跟隨 OS 主題。
 供 GUI 測試使用，若將 EXE 複製為 `stroke_settings_preview.exe` 或
 `stroke_settings_dark_preview.exe`，會自動改用旁邊的 preview-light／preview-dark
 資料夾；必要時同時複製 PRI 為相同 basename。這些別名不放進發布包。
