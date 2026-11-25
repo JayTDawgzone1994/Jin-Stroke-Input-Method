@@ -20,7 +20,9 @@
 
 ## 右下角與狀態同步
 
-固定識別圖示仍是「劃」；新增標準 `GUID_LBI_INPUTMODE` 模式按鈕，筆畫模式顯示「中」、英文模式顯示「英」。可點模式按鈕切換；使用單色圖示和 Windows 主題文字色。
+固定識別圖示仍是「劃」；新增標準 `GUID_LBI_INPUTMODE` 模式按鈕，筆畫模式顯示「中」、英文模式顯示「英」。可點模式按鈕切換。
+
+「中／英」使用透明背景的 32-bit 圖示，由輸入法直接繪製顏色，避免部分 Windows 11 工作列未套用 `TF_LBI_STYLE_TEXTCOLORICON` 的主題換色。依工作列使用的 Windows 模式（`SystemUsesLightTheme`）選擇深色白字、淺色黑字；Windows 模式與應用程式模式分開設定時，跟隨前者。高對比模式優先採用系統文字色。透過不顯示、不取得焦點的頂層視窗接收 `WM_SETTINGCHANGE`、`WM_THEMECHANGED`、`WM_SYSCOLORCHANGE`，通知 shell 重新取得圖示；每次 `GetIcon` 也重新讀取目前顏色。停用服務時一併銷毀監聽視窗。
 
 `ITfLangBarItemButton` 與 Shift 共用同一個模式切換入口。透過 thread manager 的 `GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION` 讀寫 NATIVE 位元，接收外部狀態變更並通知圖示更新。保留其他轉換旗標，不以關閉整個輸入法的方式停用組字編輯。暫時英文不改變常駐模式圖示。
 

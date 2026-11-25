@@ -1,4 +1,4 @@
-#define AppVersion "0.10.0"
+#define AppVersion "0.10.1"
 #define Root ".."
 #define Payload Root + "\out\package\payload"
 

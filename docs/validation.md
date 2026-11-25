@@ -279,3 +279,11 @@ CTest 包含框架契約、工具版本、工具說明、拒絕未實作操作�
 - 工作列不在操作工具的可擷取視窗內；使用者分別回覆確認「英 劃」與「中 劃」。未宣稱已測滑鼠點擊系統匣、所有應用程式或所有主題／DPI。
 - 測試僅用自行開啟的空白窗，不讀取既有文件。測試期間停用學習，結束後關閉測試窗與設定視窗，先確認沒有其他設定／詞庫修改，再原子還原備份；layout.dat、learning.dat SHA256 均與安裝前一致。原本連續模式關閉、逐字聯想開啟、傳統與反轉設定已保留。
 - 未 commit、push 或發布 GitHub Release；已開啟的舊程序仍需重開才能載入新版 DLL。
+
+## 2026-11-24：中英文模式圖示跟隨系統深淺色
+
+- 改為自行繪製有透明背景的 32-bit「中／英」圖示，依 SystemUsesLightTheme 選擇深色白字、淺色黑字，高對比模式採用 COLOR_WINDOWTEXT。移除依賴 shell 換色的 TEXTCOLORICON 旗標。
+- 不顯示、不取得焦點的頂層視窗接收設定／主題／系統色變更，透過 TF_LBI_ICON 通知 shell 重新取得圖示；解除訂閱或停用服務時銷毀視窗。
+- MSVC Release x64／x86 編譯成功；各自的 windows.input_mode、windows.tsf_host、windows.com_contracts 共 6 項測試通過。圖示測試實際繪製兩種文字與黑／白／高對比黃色，在 16、24、32、48 像素檢查字色與透明背景，並驗證主題通知及監聽視窗清理。
+- 同日完成 0.10.1 安裝包與散布 ZIP；兩架構各 24 項完整 CTest、WinUI 隔離自我測試、payload／對應原始碼與 SHA256 檢查通過，已安裝本機。安裝紀錄確認兩架構 selftest／register exit 0，註冊均指向 versions/0.10.1，已安裝 DLL／setup 與 payload 雜湊一致，不需重新開機。
+- 未修改使用者的系統主題；安裝前後 layout.dat、learning.dat SHA256 相同。實際工作列的深淺色呈現仍待驗收；未發布 GitHub Release。
